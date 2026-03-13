@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+sqlalchemy[asyncio]
+asyncpg
+polars[rtcompat]
+fastexcel
+python-multipart
+celery
+redis
+alembic
+pydantic-settings
+psycopg2-binary
+adbc-driver-postgresql
+xlsxwriter
+

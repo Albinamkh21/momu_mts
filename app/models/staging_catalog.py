@@ -1,0 +1,61 @@
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import String, Text, DateTime, UUID
+from core.database import Base
+from datetime import datetime
+from typing import Optional
+
+
+class StagingCatalog(Base):
+    __tablename__ = "staging_catalog"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    import_batch_id: Mapped[Optional[str]] = mapped_column(UUID)
+    loaded_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    upc: Mapped[Optional[str]] = mapped_column(Text)
+    isrc: Mapped[Optional[str]] = mapped_column(Text)
+    track_name: Mapped[Optional[str]] = mapped_column(Text)
+    genre_name: Mapped[Optional[str]] = mapped_column(Text)
+    album_name: Mapped[Optional[str]] = mapped_column(Text)
+    album_single: Mapped[Optional[str]] = mapped_column(Text)
+    track_number: Mapped[Optional[str]] = mapped_column(Text)
+    artist_name: Mapped[Optional[str]] = mapped_column(Text)
+    track_artist_name: Mapped[Optional[str]] = mapped_column(Text)
+    composer: Mapped[Optional[str]] = mapped_column(Text)
+    lyricist: Mapped[Optional[str]] = mapped_column(Text)
+    authors: Mapped[Optional[str]] = mapped_column(Text)
+    explicit: Mapped[Optional[str]] = mapped_column(Text)
+    duration: Mapped[Optional[str]] = mapped_column(Text)
+    label_name: Mapped[Optional[str]] = mapped_column(Text)
+    total_author_right: Mapped[Optional[str]] = mapped_column(Text)
+    right_id: Mapped[Optional[str]] = mapped_column(Text)
+    author_right_1: Mapped[Optional[str]] = mapped_column(Text)
+    ar_label_treaty_number_1: Mapped[Optional[str]] = mapped_column(Text)
+    author_right_2: Mapped[Optional[str]] = mapped_column(Text)
+    ar_label_treaty_number_2: Mapped[Optional[str]] = mapped_column(Text)
+    author_right_3: Mapped[Optional[str]] = mapped_column(Text)
+    ar_label_treaty_number_3: Mapped[Optional[str]] = mapped_column(Text)
+    total_related_right: Mapped[Optional[str]] = mapped_column(Text)
+    related_right_id_1: Mapped[Optional[str]] = mapped_column(Text)
+    rr_label_treaty_number_1: Mapped[Optional[str]] = mapped_column(Text)
+    related_right_id_2: Mapped[Optional[str]] = mapped_column(Text)
+    rr_label_treaty_number_2: Mapped[Optional[str]] = mapped_column(Text)
+    related_right_id_3: Mapped[Optional[str]] = mapped_column(Text)
+    rr_label_treaty_number_3: Mapped[Optional[str]] = mapped_column(Text)
+    types_of_rights: Mapped[Optional[str]] = mapped_column(Text)
+    countries: Mapped[Optional[str]] = mapped_column(Text)
+    create_date: Mapped[Optional[str]] = mapped_column(Text)
+    release_date: Mapped[Optional[str]] = mapped_column(Text)
+    sales_start_date: Mapped[Optional[str]] = mapped_column(Text)
+    has_ringtone: Mapped[Optional[str]] = mapped_column(Text)
+    ringtone_upc: Mapped[Optional[str]] = mapped_column(Text)
+    ringtone_isrc: Mapped[Optional[str]] = mapped_column(Text)
+    has_vclip: Mapped[Optional[str]] = mapped_column(Text)
+    vclip_isrc: Mapped[Optional[str]] = mapped_column(Text)
+    video_upc: Mapped[Optional[str]] = mapped_column(Text)
+    has_lyrics: Mapped[Optional[str]] = mapped_column(Text)
+    has_ttml: Mapped[Optional[str]] = mapped_column(Text)
+    effective_date: Mapped[Optional[str]] = mapped_column(Text)
+    termination_date: Mapped[Optional[str]] = mapped_column(Text)
+    active_inactive: Mapped[Optional[str]] = mapped_column(Text)
+    resource_reference: Mapped[Optional[str]] = mapped_column(Text)
