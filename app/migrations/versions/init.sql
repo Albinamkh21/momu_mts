@@ -87,6 +87,7 @@ CREATE TABLE track (
     release_id BIGINT REFERENCES release(id),
     isrc VARCHAR(20),
     label_own_code VARCHAR(20),
+    label_id INTEGER REFERENCES label(id),
     title TEXT NOT NULL,
     duration INTERVAL,
     explicit BOOLEAN DEFAULT FALSE,
@@ -112,10 +113,23 @@ CREATE TABLE track_right (
     share_percentage NUMERIC(5,2) CHECK (share_percentage BETWEEN 0 AND 100)
 );
 
+CREATE TABLE track_label (
+    id SERIAL PRIMARY KEY,
+    track_id INTEGER REFERENCES track(id) ON DELETE CASCADE,
+    label_id INTEGER REFERENCES label(id), 
+      UNIQUE (track_id, label_id)
+);
+
+ALTER TABLE track_label 
+ADD CONSTRAINT track_label_unique_idx 
+UNIQUE (track_id, label_id);
+
+
 
 CREATE INDEX idx_track_isrc ON track(isrc);
 CREATE INDEX idx_track_title_trgm ON track USING gin (title gin_trgm_ops);
 CREATE INDEX idx_person_name_trgm ON person USING gin (full_name gin_trgm_ops);
+
 
 INSERT INTO right_usage_type (code, name) VALUES 
 ('ALL', 'All rights'),
@@ -137,9 +151,9 @@ CREATE TABLE staging_report (
     authors TEXT,
     author_share_pct TEXT,
     related_share_pct TEXT,
-    play_count INT DEFAULT 0,
-    payout_amount NUMERIC(20, 4) DEFAULT 0.0,
-    price_per_play NUMERIC(20, 6) DEFAULT 0.0
+    play_count TEXT,
+    payout_amount TEXT,
+    price_per_play TEXT
   
 );
 
@@ -255,3 +269,16 @@ END;
 $$ LANGUAGE plpgsql;
 
 
+
+
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_label_name ON label(name);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_person_name ON person(full_name);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_right_holder_name ON right_holder(name);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_track_contribution_unique 
+ON track_contribution (track_id, person_id, role);
+
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_track_right_unique 
+ON track_right (track_id, right_holder_id, right_category_id);

@@ -145,36 +145,29 @@ def update_catalog_dictionaries_from_report():
 def insert_data_into_final_report_table(partner_id: int, right_category_id: int, right_usage_type_id: int, month: int, year: int):
     """
     Задача для переноса данных из staging_report в итоговую таблицу report.
+    После вставки экспортирует данные в Excel с информацией о треках и правах.
     """
     try:
         insert_report_sql = text("""
-        INSERT INTO report (
-            track_id, 
-            partner_id, 
-            right_category_id, 
-            right_usage_type_id, 
-            report_month, 
-            report_year, 
-            play_count, 
-            payout_amount, 
-            price_per_play, 
-            author_share_pct, 
-            related_share_pct
-        )
-        SELECT 
-            t.id AS track_id,
-            :partner_id,
-            :right_category_id,
-            :right_usage_type_id,
-            :month, 
-            :year,   
-            COALESCE(s.play_count::INT, 0),
-            COALESCE(REPLACE(s.payout_amount, ',', '.')::NUMERIC(20, 4), 0),
-            COALESCE(REPLACE(s.price_per_play, ',', '.')::NUMERIC(20, 6), 0),
-            COALESCE(REPLACE(s.author_share_pct, ',', '.')::NUMERIC(5, 2), 0),
-            COALESCE(REPLACE(s.related_share_pct, ',', '.')::NUMERIC(5, 2), 0)
-        FROM staging_report s
-        JOIN track t ON s.isrc = t.isrc
+       INSERT INTO report (
+        track_id, partner_id, right_category_id, right_usage_type_id, 
+        report_month, report_year, play_count, payout_amount, 
+        price_per_play, author_share_pct, related_share_pct
+    )
+    SELECT 
+        t.id,
+        :partner_id,
+        :right_category_id,
+        :right_usage_type_id,
+        :month, 
+        :year,   
+        COALESCE(NULLIF(s.play_count, ''), '0')::INT,
+        COALESCE(NULLIF(REPLACE(s.payout_amount, ',', '.'), ''), '0')::NUMERIC(20, 4),
+        COALESCE(NULLIF(REPLACE(s.price_per_play, ',', '.'), ''), '0')::NUMERIC(20, 6),
+        COALESCE(NULLIF(REPLACE(s.author_share_pct, ',', '.'), ''), '0')::NUMERIC(5, 2),
+        COALESCE(NULLIF(REPLACE(s.related_share_pct, ',', '.'), ''), '0')::NUMERIC(5, 2)
+    FROM staging_report s
+    JOIN track t ON s.isrc = t.isrc;
         """)
 
         with engine.begin() as connection:
@@ -186,9 +179,70 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
                 "year": year
             })
             rows_affected = result.rowcount
-            
+
         print(f"✅ Данные перенесены в итоговую таблицу report. Добавлено записей: {rows_affected}")
-        return {"status": "success", "report_records_added": rows_affected}
+
+        # Экспорт данных в Excel
+        print("📤 Начинаем экспорт отчёта в Excel...")
+        export_query = """
+        SELECT DISTINCT
+            s.label_own_code AS "Код лейбла",
+            t.isrc AS "Код ISRC",
+            t.title AS "Название трека",
+            (SELECT string_agg(DISTINCT p.full_name, ', ')
+             FROM track_contribution tc JOIN person p ON p.id = tc.person_id
+             WHERE tc.track_id = t.id AND tc.role = 'performer'
+            ) AS "Исполнитель",
+            (SELECT string_agg(DISTINCT p.full_name, ', ')
+             FROM track_contribution tc JOIN person p ON p.id = tc.person_id
+             WHERE tc.track_id = t.id AND tc.role = 'composer'
+            ) AS "Автор музыки",
+            (SELECT string_agg(DISTINCT p.full_name, ', ')
+             FROM track_contribution tc JOIN person p ON p.id = tc.person_id
+             WHERE tc.track_id = t.id AND tc.role = 'lyricist'
+            ) AS "Автор текста",
+            (SELECT string_agg(DISTINCT p.full_name, ', ')
+             FROM track_contribution tc JOIN person p ON p.id = tc.person_id
+             WHERE tc.track_id = t.id AND tc.role = 'author'
+            ) AS "Авторы",
+            COALESCE(
+                (SELECT SUM(tr.share_percentage)
+                 FROM track_right tr
+                 JOIN right_category rc ON rc.id = tr.right_category_id
+                 WHERE tr.track_id = t.id AND rc.name = 'Author'), 0
+            ) AS "Доля авторских прав, %",
+            COALESCE(
+                (SELECT SUM(tr.share_percentage)
+                 FROM track_right tr
+                 JOIN right_category rc ON rc.id = tr.right_category_id
+                 WHERE tr.track_id = t.id AND rc.name = 'Related'), 0
+            ) AS "Доля смежных прав, %"
+        FROM staging_report s
+        JOIN track t ON s.isrc = t.isrc
+        ORDER BY s.label_own_code, t.title;
+        """
+
+        with engine.connect() as conn:
+            df = pl.read_database(
+                query=export_query,
+                connection=conn,
+                infer_schema_length=None
+            )
+
+            storage_dir = "/app/storage"
+            os.makedirs(storage_dir, exist_ok=True)
+            output_path = os.path.join(storage_dir, "final_report.xlsx")
+            df.write_excel(output_path)
+
+        print(f"✅ Отчёт экспортирован в файл: {output_path}")
+        print(f"📊 Всего строк в файле: {len(df)}")
+
+        return {
+            "status": "success",
+            "report_records_added": rows_affected,
+            "rows_exported": len(df),
+            "output_file": output_path
+        }
 
     except Exception as e:
         print(f"❌ Ошибка при переносе данных в report: {str(e)}")

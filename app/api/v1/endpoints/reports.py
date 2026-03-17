@@ -1,4 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
+from pydantic import BaseModel, Field
 import shutil
 import os
 from uuid import uuid4
@@ -6,6 +7,14 @@ from celery import chain
 from tasks.report_tasks import process_report_file, update_catalog_dictionaries_from_report, insert_data_into_final_report_table, group_report_data
 
 router = APIRouter()
+
+
+class ReportDataRequest(BaseModel):
+    partner_id: int
+    right_category_id: int
+    right_usage_type_id: int
+    month: int = Field(..., ge=1, le=12)
+    year: int
 
 STORAGE_DIR = "/app/storage"
 
@@ -38,6 +47,40 @@ async def upload_report(file: UploadFile = File(...)):
         "task_id": task_result.id,
         "filename": file.filename
     }
+
+
+@router.post("/get_report_data")
+async def get_report_data_endpoint(data: ReportDataRequest):
+    """
+    Эндпоинт для переноса данных из staging_report в итоговую таблицу report.
+    Параметры:
+    - partner_id: ID партнёра
+    - right_category_id: ID категории прав (из таблицы right_category)
+    - right_usage_type_id: ID типа использования прав (из таблицы right_usage_type)
+    - month: порядковый номер месяца (1-12)
+    - year: год (например 2025, 2026)
+    """
+    try:
+        task_result = insert_data_into_final_report_table.delay(
+            data.partner_id,
+            data.right_category_id,
+            data.right_usage_type_id,
+            data.month,
+            data.year
+        )
+        return {
+            "message": "Задача переноса данных в итоговую таблицу report запущена",
+            "task_id": task_result.id,
+            "params": {
+                "partner_id": data.partner_id,
+                "right_category_id": data.right_category_id,
+                "right_usage_type_id": data.right_usage_type_id,
+                "month": data.month,
+                "year": data.year
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка при запуске задачи: {str(e)}")
 
 
 @router.post("/group_report_data")

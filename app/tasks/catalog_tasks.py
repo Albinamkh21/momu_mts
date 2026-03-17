@@ -12,6 +12,9 @@ def process_catalog_file(file_path: str):
         return {"status": "error", "message": "File not found"}
 
     try:
+        with engine.begin() as conn:
+            conn.execute(text("TRUNCATE TABLE staging_catalog"))
+
         df = pl.read_excel(file_path) 
         
         total_rows = len(df)
@@ -160,44 +163,35 @@ def sync_catalog_dictionaries():
 
             # --- 4. ЗАПОЛНЯЕМ RELEASE (релизы/альбомы) ---
             result_releases = conn.execute(text("""
+                WITH release_candidates AS (
+                    SELECT DISTINCT
+                        NULLIF(TRIM(sc.upc), '') AS upc,
+                        COALESCE(NULLIF(TRIM(sc.album_name), ''), 'Unknown Album') AS title,
+                        CASE 
+                            WHEN NULLIF(TRIM(sc.release_date), '') IS NOT NULL 
+                            THEN CAST(TRIM(sc.release_date) AS DATE)
+                            ELSE NULL 
+                        END AS release_date,
+                        l.id AS label_id,
+                        1 AS status,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY NULLIF(TRIM(sc.upc), '') 
+                            ORDER BY 
+                                CASE WHEN l.id IS NOT NULL THEN 1 ELSE 2 END,  -- приоритет записям с label_id
+                                CASE WHEN NULLIF(TRIM(sc.release_date), '') IS NOT NULL THEN 1 ELSE 2 END,  -- приоритет с датой
+                                sc.id  -- стабильный порядок для одинаковых случаев
+                        ) AS rn
+                    FROM staging_catalog sc
+                    LEFT JOIN label l ON l.name = TRIM(sc.label_name)
+                    WHERE COALESCE(NULLIF(TRIM(sc.album_name), ''), 'Unknown Album') IS NOT NULL
+                      AND NULLIF(TRIM(sc.upc), '') IS NOT NULL  -- только записи с UPC
+                )
                 INSERT INTO release (upc, title, release_date, label_id, status)
-                SELECT DISTINCT 
-                    NULLIF(TRIM(sc.upc), '') AS upc,
-                    COALESCE(NULLIF(TRIM(sc.album_name), ''), 'Unknown Album') AS title,
-                    CASE 
-                        WHEN NULLIF(TRIM(sc.release_date), '') IS NOT NULL 
-                        THEN CAST(TRIM(sc.release_date) AS DATE)
-                        ELSE NULL 
-                    END AS release_date,
-                    l.id AS label_id,
-                    CASE 
-                        WHEN LOWER(TRIM(sc.active_inactive)) = 'active' THEN 'Active'
-                        WHEN LOWER(TRIM(sc.active_inactive)) = 'inactive' THEN 'Inactive' 
-                        ELSE 'Active'
-                    END AS status
-                FROM staging_catalog sc
-                LEFT JOIN label l ON l.name = TRIM(sc.label_name)
-                WHERE COALESCE(NULLIF(TRIM(sc.album_name), ''), 'Unknown Album') IS NOT NULL
-                GROUP BY 
-                    NULLIF(TRIM(sc.upc), ''),
-                    COALESCE(NULLIF(TRIM(sc.album_name), ''), 'Unknown Album'),
-                    CASE 
-                        WHEN NULLIF(TRIM(sc.release_date), '') IS NOT NULL 
-                        THEN CAST(TRIM(sc.release_date) AS DATE)
-                        ELSE NULL 
-                    END,
-                    l.id,
-                    CASE 
-                        WHEN LOWER(TRIM(sc.active_inactive)) = 'active' THEN 'Active'
-                        WHEN LOWER(TRIM(sc.active_inactive)) = 'inactive' THEN 'Inactive' 
-                        ELSE 'Active'
-                    END
-                ON CONFLICT (upc) DO UPDATE SET
-                    title = EXCLUDED.title,
-                    release_date = EXCLUDED.release_date,
-                    label_id = EXCLUDED.label_id,
-                    status = EXCLUDED.status
-                WHERE EXCLUDED.upc IS NOT NULL
+                SELECT upc, title, release_date, label_id, status
+                FROM release_candidates 
+                WHERE rn = 1  -- берём только первую запись для каждого UPC
+                
+                ON CONFLICT (upc) DO NOTHING
                 RETURNING id;
             """))
             releases_count = result_releases.rowcount
@@ -205,7 +199,7 @@ def sync_catalog_dictionaries():
 
             # --- 5. ЗАПОЛНЯЕМ TRACK (треки) ---
             result_tracks = conn.execute(text("""
-                INSERT INTO track (release_id, isrc, label_own_code, title, duration, explicit, resource_reference, meta)
+                INSERT INTO track (release_id, isrc, label_own_code,  title, duration, explicit, resource_reference, meta)
                 SELECT DISTINCT ON (sc.id)
                     r.id AS release_id,
                     NULLIF(TRIM(sc.isrc), '') AS isrc,
@@ -239,25 +233,46 @@ def sync_catalog_dictionaries():
                         'sales_start_date', NULLIF(TRIM(sc.sales_start_date), '')
                     ) AS meta
                 FROM staging_catalog sc
+                LEFT JOIN label l ON l.name = sc.label_name
                 LEFT JOIN release r ON (
                 CASE 
                     WHEN NULLIF(TRIM(sc.upc), '') IS NOT NULL THEN r.upc = TRIM(sc.upc)
                     ELSE r.title = NULLIF(TRIM(sc.album_name), '')
                 END
-            )
-            ORDER BY sc.id, r.id;
-            """))
+
+                )
+                WHERE  
+                NOT EXISTS (
+                SELECT 1 FROM track t2 
+                WHERE (
+                    -- Запись считается дубликатом, только если совпало ВСЁ, что заполнено
+                    (NULLIF(TRIM(sc.isrc), '') IS NOT NULL AND t2.isrc = TRIM(sc.isrc))
+                    AND 
+                    (NULLIF(TRIM(sc.right_id), '') IS NOT NULL AND t2.label_own_code = TRIM(sc.right_id))
+                )
+                -- Если ISRC пустой, проверяем только по коду и имени
+                    OR (
+                        NULLIF(TRIM(sc.isrc), '') IS NULL 
+                        AND t2.label_own_code = TRIM(sc.right_id) 
+                        AND t2.title = TRIM(sc.track_name)
+                    )
+                )
+                ORDER BY sc.id, r.id;
+                """))
             tracks_count = result_tracks.rowcount
             print(f"✅ Tracks вставлено: {tracks_count}")
 
+
+
+            # --- 6. ЗАПОЛНЯЕМ TRACK_CONTRIBUTION (связь трек - участник) ---
             result_contributions = conn.execute(text("""
-                INSERT INTO track_contribution (track_id, person_id, role)
-                SELECT DISTINCT ON (t.id, p.id, unpivoted.role)
-                    t.id AS track_id, 
-                    p.id AS person_id, 
+               INSERT INTO track_contribution (track_id, person_id, role)
+                SELECT DISTINCT 
+                    t.id, 
+                    p.id, 
                     unpivoted.role
                 FROM staging_catalog sc
-                -- Разворачиваем 5 колонок в строки за ОДИН проход
+                JOIN track t ON t.isrc = sc.isrc AND t.label_own_code = sc.right_id
                 CROSS JOIN LATERAL (
                     VALUES 
                         (sc.artist_name, 'artist_name'),
@@ -266,24 +281,55 @@ def sync_catalog_dictionaries():
                         (sc.lyricist, 'lyricist'),
                         (sc.authors, 'authors')
                 ) AS unpivoted(val, role)
-
-                JOIN track t ON (
-                    CASE 
-                        WHEN sc.isrc IS NOT NULL AND sc.isrc != '' THEN t.isrc = sc.isrc
-                        ELSE t.title = sc.track_name
-                    END
-                )
                 CROSS JOIN LATERAL unnest(string_to_array(unpivoted.val, ',')) AS raw_name
                 JOIN person p ON p.full_name = TRIM(raw_name)
-                WHERE unpivoted.val IS NOT NULL AND unpivoted.val != ''
-                ORDER BY t.id, p.id, unpivoted.role;
-            """))
+                WHERE sc.isrc IS NOT NULL AND unpivoted.val IS NOT NULL AND unpivoted.val != ''
+                ON CONFLICT (track_id, person_id, role) DO NOTHING;
 
-
-
+          
+                """))
 
             contributions_count = result_contributions.rowcount
             print(f"✅ Track contributions вставлено: {contributions_count}")
+
+
+            result_contributions = conn.execute(text("""
+               INSERT INTO track_contribution (track_id, person_id, role)
+                SELECT DISTINCT ON (t.id, p.id, unpivoted.role)
+                    t.id AS track_id, 
+                    p.id AS person_id, 
+                    unpivoted.role
+                FROM staging_catalog sc
+            
+                JOIN track t ON t.label_own_code = sc.right_id 
+                    AND t.title = sc.track_name AND t.isrc is NULL
+                CROSS JOIN LATERAL (
+                    VALUES 
+                        (sc.artist_name, 'artist_name'),
+                        (sc.track_artist_name, 'track_artist_name'),
+                        (sc.composer, 'composer'),
+                        (sc.lyricist, 'lyricist'),
+                        (sc.authors, 'authors')
+                ) AS unpivoted(val, role)
+                CROSS JOIN LATERAL unnest(string_to_array(unpivoted.val, ',')) AS raw_name
+                JOIN person p ON p.full_name = TRIM(raw_name)
+                WHERE unpivoted.val IS NOT NULL AND unpivoted.val != ''
+                 AND NOT EXISTS (
+                    SELECT 1 FROM track_contribution tc 
+                    WHERE tc.track_id = t.id 
+                    AND tc.person_id = p.id 
+                    AND tc.role = unpivoted.role
+                )    
+                                ORDER BY t.id, p.id, unpivoted.role
+                ;
+
+          
+                """))
+
+            contributions_count = result_contributions.rowcount
+            print(f"✅ Track contributions вставлено: {contributions_count}")
+
+
 
             # --- 7. ЗАПОЛНЯЕМ TRACK_RIGHT (права на треки) ---
             mapping = [
@@ -305,14 +351,16 @@ def sync_catalog_dictionaries():
                     rc.id,
                     COALESCE(NULLIF(REGEXP_REPLACE(TRIM(sc.{share_col}::text), '[^0-9.]', '', 'g'), '')::NUMERIC, 0.0)
                 FROM staging_catalog sc
-                JOIN track t ON (
-                    (NULLIF(TRIM(sc.isrc), '') IS NOT NULL AND t.isrc = UPPER(REGEXP_REPLACE(sc.isrc, '[^A-Za-z0-9]', '', 'g')))
-                    OR 
-                    (NULLIF(TRIM(sc.isrc), '') IS NULL AND t.title = TRIM(sc.track_name))
-                )
+                JOIN track t ON t.isrc = sc.isrc and t.isrc is NOT NULL
                 JOIN right_holder rh ON rh.name = TRIM(sc.{holder_col})
                 JOIN right_category rc ON rc.name = '{cat_name}'
                 WHERE sc.{holder_col} IS NOT NULL AND TRIM(sc.{holder_col}) != ''
+                AND NOT EXISTS (
+                    SELECT 1 FROM track_right tr
+                    WHERE tr.track_id = t.id 
+                    AND tr.right_holder_id = rh.id 
+                    AND tr.right_category_id = rc.id
+                )
                 ORDER BY t.id, rh.id, rc.id;
                 """
                 result = conn.execute(text(sql))
@@ -321,6 +369,60 @@ def sync_catalog_dictionaries():
                 print(f"✅ В {cat_name} ({holder_col}) вставлено: {count}")
 
             print(f"🏁 ИТОГО вставлено в track_right: {track_rights_count}")
+
+            for holder_col, share_col, cat_name in mapping:
+                sql = f"""
+                INSERT INTO track_right (track_id, contract_id, right_holder_id, right_category_id, share_percentage)
+                SELECT DISTINCT ON (t.id, rh.id, rc.id)
+                    t.id,
+                    NULL::BIGINT,
+                    rh.id,
+                    rc.id,
+                    COALESCE(NULLIF(REGEXP_REPLACE(TRIM(sc.{share_col}::text), '[^0-9.]', '', 'g'), '')::NUMERIC, 0.0)
+                FROM staging_catalog sc
+                JOIN track t ON ( t.isrc is NULL and t.label_own_code = sc.right_id )
+                JOIN right_holder rh ON rh.name = TRIM(sc.{holder_col})
+                JOIN right_category rc ON rc.name = '{cat_name}'
+                WHERE sc.{holder_col} IS NOT NULL AND TRIM(sc.{holder_col}) != ''
+                AND NOT EXISTS (
+                    SELECT 1 FROM track_right tr
+                    WHERE tr.track_id = t.id 
+                    AND tr.right_holder_id = rh.id 
+                    AND tr.right_category_id = rc.id
+                )
+                ORDER BY t.id, rh.id, rc.id;
+                """
+                result = conn.execute(text(sql))
+                count = result.rowcount
+                track_rights_count += count
+                print(f"✅ В {cat_name} ({holder_col}) вставлено: {count}")
+
+            print(f"🏁 ИТОГО вставлено в track_right: {track_rights_count}")
+
+
+
+              # --- 8. ЗАПОЛНЯЕМ TRACK_LABEL (связь трек - участник) ---
+            result_track_label = conn.execute(text("""
+                INSERT INTO track_label (track_id, label_id)
+                SELECT DISTINCT t.id, l.id
+                FROM staging_catalog sc
+                JOIN label l ON l.name = sc.label_name
+                JOIN track t ON (
+                    (NULLIF(sc.isrc, '') IS NOT NULL 
+                    AND t.isrc = sc.isrc  )
+                    OR 
+                    (NULLIF(sc.isrc, '') IS NULL 
+                    AND t.label_own_code = sc.right_id 
+                   )
+                )
+                WHERE sc.label_name IS NOT NULL AND sc.label_name != ''
+                ON CONFLICT (track_id, label_id) DO NOTHING;
+            """))
+
+            print(f"✅ Связей track_label добавлено: {result_track_label.rowcount}")
+
+
+
 
             return {
                 "status": "success",
@@ -566,74 +668,88 @@ def check_catalog_integrity():
 
 
 @celery_app.task(name="export_normalized_catalog_to_flat")
-def export_normalized_catalog_to_flat(output_path: str = None):
-    query = """
-        WITH contributors_agg AS (
+def export_normalized_catalog_to_flat(output_path: str = None, label_id: int = None):
+    # Build WHERE clause if label_id is provided
+    where_clause = "WHERE tl.label_id = :label_id" if label_id else ""
+    
+    query = f"""
+        WITH authors_flat AS (
+            -- Группируем авторов строго по track_id (НЕ по ISRC!)
             SELECT 
                 tc.track_id,
-                string_agg(p.full_name, ', ') FILTER (WHERE tc.role = 'artist_name') AS artist_name,
-                string_agg(p.full_name, ', ') FILTER (WHERE tc.role = 'track_artist_name') AS track_artist_name,
-                string_agg(p.full_name, ', ') FILTER (WHERE tc.role = 'composer') AS composer,
-                string_agg(p.full_name, ', ') FILTER (WHERE tc.role = 'lyricist') AS lyricist,
-                string_agg(p.full_name, ', ') FILTER (WHERE tc.role = 'authors') AS authors
+                string_agg(DISTINCT p.full_name, ', ') FILTER (WHERE tc.role = 'artist_name') AS artist_name,
+                string_agg(DISTINCT p.full_name, ', ') FILTER (WHERE tc.role = 'track_artist_name') AS track_artist_name,
+                string_agg(DISTINCT p.full_name, ', ') FILTER (WHERE tc.role = 'composer') AS composer,
+                string_agg(DISTINCT p.full_name, ', ') FILTER (WHERE tc.role = 'lyricist') AS lyricist,
+                string_agg(DISTINCT p.full_name, ', ') FILTER (WHERE tc.role = 'authors') AS authors
             FROM track_contribution tc
             JOIN person p ON p.id = tc.person_id
             GROUP BY tc.track_id
         ),
-        rights_ranked AS (
+        rights_agg AS (
+            -- Группируем права строго по track_id (НЕ по ISRC!)
             SELECT 
                 tr.track_id,
-                rh.name AS holder_name,
-                tr.share_percentage AS share,
-                rc.name AS category,
-                row_number() OVER (PARTITION BY tr.track_id, rc.name ORDER BY tr.id) AS rank
-            FROM track_right tr
-            JOIN right_holder rh ON rh.id = tr.right_holder_id
+                SUM(tr.share_percentage) FILTER (WHERE rc.name = 'Author') AS total_author_right,
+                SUM(tr.share_percentage) FILTER (WHERE rc.name = 'Related') AS total_related_right,
+                -- Ранги для распределения по колонкам
+                MAX(CASE WHEN rc.name = 'Author' AND rank = 1 THEN tr.share_percentage END) AS ar_share_1,
+                MAX(CASE WHEN rc.name = 'Author' AND rank = 1 THEN rh.name END) AS ar_holder_1,
+                MAX(CASE WHEN rc.name = 'Author' AND rank = 2 THEN tr.share_percentage END) AS ar_share_2,
+                MAX(CASE WHEN rc.name = 'Author' AND rank = 2 THEN rh.name END) AS ar_holder_2,
+                MAX(CASE WHEN rc.name = 'Author' AND rank = 3 THEN tr.share_percentage END) AS ar_share_3,
+                MAX(CASE WHEN rc.name = 'Author' AND rank = 3 THEN rh.name END) AS ar_holder_3,
+                MAX(CASE WHEN rc.name = 'Related' AND rank = 1 THEN tr.share_percentage END) AS rr_share_1,
+                MAX(CASE WHEN rc.name = 'Related' AND rank = 1 THEN rh.name END) AS rr_holder_1,
+                MAX(CASE WHEN rc.name = 'Related' AND rank = 2 THEN tr.share_percentage END) AS rr_share_2,
+                MAX(CASE WHEN rc.name = 'Related' AND rank = 2 THEN rh.name END) AS rr_holder_2,
+                MAX(CASE WHEN rc.name = 'Related' AND rank = 3 THEN tr.share_percentage END) AS rr_share_3,
+                MAX(CASE WHEN rc.name = 'Related' AND rank = 3 THEN rh.name END) AS rr_holder_3
+            FROM (
+                SELECT tr.*, 
+                       row_number() OVER (PARTITION BY tr.track_id, tr.right_category_id ORDER BY tr.id) as rank 
+                FROM track_right tr
+            ) tr
             JOIN right_category rc ON rc.id = tr.right_category_id
+            JOIN right_holder rh ON rh.id = tr.right_holder_id
+            GROUP BY tr.track_id
         )
-        SELECT 
-            r.upc::TEXT, 
+        SELECT DISTINCT ON (t.id)
+            COALESCE(r.upc, 'NO_UPC')::TEXT AS upc,
             t.isrc::TEXT, 
             t.title::TEXT AS track_name,
             (t.meta->>'genre')::TEXT AS genre_name,
-            r.title::TEXT AS album_name,
+            COALESCE(r.title, 'NO_RELEASE')::TEXT AS album_name,
             NULL::TEXT AS album_single,
             (t.meta->>'track_number')::TEXT AS track_number,
-            c.artist_name::TEXT,
-            c.track_artist_name::TEXT,
-            c.composer::TEXT,
-            c.lyricist::TEXT,
-            c.authors::TEXT,
-            
+            af.artist_name,
+            af.track_artist_name,
+            af.composer,
+            af.lyricist,
+            af.authors,
             CASE WHEN t.explicit THEN 'Да' ELSE 'Нет' END AS explicit,
-            
             to_char(t.duration, 'MI:SS') AS duration,
-            
-            l.name::TEXT AS label_name,
-            
-            (SELECT SUM(share) FROM rights_ranked WHERE track_id = t.id AND category = 'Author')::NUMERIC AS total_author_right,
-            NULL::TEXT AS right_id,
-            MAX(CASE WHEN rr.category = 'Author' AND rr.rank = 1 THEN rr.share END)::NUMERIC AS author_right_1,
-            MAX(CASE WHEN rr.category = 'Author' AND rr.rank = 1 THEN rr.holder_name END)::TEXT AS ar_label_treaty_number_1,
-            MAX(CASE WHEN rr.category = 'Author' AND rr.rank = 2 THEN rr.share END)::NUMERIC AS author_right_2,
-            MAX(CASE WHEN rr.category = 'Author' AND rr.rank = 2 THEN rr.holder_name END)::TEXT AS ar_label_treaty_number_2,
-            MAX(CASE WHEN rr.category = 'Author' AND rr.rank = 3 THEN rr.share END)::NUMERIC AS author_right_3,
-            MAX(CASE WHEN rr.category = 'Author' AND rr.rank = 3 THEN rr.holder_name END)::TEXT AS ar_label_treaty_number_3,
-            
-            (SELECT SUM(share) FROM rights_ranked WHERE track_id = t.id AND category = 'Related')::NUMERIC AS total_related_right,
-            MAX(CASE WHEN rr.category = 'Related' AND rr.rank = 1 THEN rr.share END)::NUMERIC AS related_right_id_1,
-            MAX(CASE WHEN rr.category = 'Related' AND rr.rank = 1 THEN rr.holder_name END)::TEXT AS rr_label_treaty_number_1,
-            MAX(CASE WHEN rr.category = 'Related' AND rr.rank = 2 THEN rr.share END)::NUMERIC AS related_right_id_2,
-            MAX(CASE WHEN rr.category = 'Related' AND rr.rank = 2 THEN rr.holder_name END)::TEXT AS rr_label_treaty_number_2,
-            MAX(CASE WHEN rr.category = 'Related' AND rr.rank = 3 THEN rr.share END)::NUMERIC AS related_right_id_3,
-            MAX(CASE WHEN rr.category = 'Related' AND rr.rank = 3 THEN rr.holder_name END)::TEXT AS rr_label_treaty_number_3,
-            
+            COALESCE(l.name, 'NO_LABEL')::TEXT AS label_name,
+            ra.total_author_right,
+            t.label_own_code::TEXT AS right_id,
+            ra.ar_share_1 AS author_right_1,
+            ra.ar_holder_1 AS ar_label_treaty_number_1,
+            ra.ar_share_2 AS author_right_2,
+            ra.ar_holder_2 AS ar_label_treaty_number_2,
+            ra.ar_share_3 AS author_right_3,
+            ra.ar_holder_3 AS ar_label_treaty_number_3,
+            ra.total_related_right,
+            ra.rr_share_1 AS related_right_id_1,
+            ra.rr_holder_1 AS rr_label_treaty_number_1,
+            ra.rr_share_2 AS related_right_id_2,
+            ra.rr_holder_2 AS rr_label_treaty_number_2,
+            ra.rr_share_3 AS related_right_id_3,
+            ra.rr_holder_3 AS rr_label_treaty_number_3,
             (t.meta->>'types_of_rights')::TEXT AS types_of_rights,
             (t.meta->>'countries')::TEXT AS countries,
             NULL::TEXT AS create_date,
-            (r.release_date)::TEXT,
+            COALESCE(r.release_date, NULL)::TEXT AS release_date,
             (t.meta->>'sales_start_date')::TEXT AS sales_start_date,
-            
             CASE WHEN (t.meta->>'has_ringtone')::boolean THEN 'Да' ELSE 'Нет' END AS has_ringtone,
             (t.meta->>'ringtone_upc')::TEXT AS ringtone_upc,
             (t.meta->>'ringtone_isrc')::TEXT AS ringtone_isrc,
@@ -642,29 +758,37 @@ def export_normalized_catalog_to_flat(output_path: str = None):
             (t.meta->>'video_upc')::TEXT AS video_upc,
             CASE WHEN (t.meta->>'has_lyrics')::boolean THEN 'Да' ELSE 'Нет' END AS has_lyrics,
             CASE WHEN (t.meta->>'has_ttml')::boolean THEN 'Да' ELSE 'Нет' END AS has_ttml,
-            
             NULL::TEXT AS effective_date,
             NULL::TEXT AS termination_date,
-            r.status::TEXT AS active_inactive,
+            COALESCE(r.status, '')::TEXT AS active_inactive,
             t.resource_reference::TEXT
         FROM track t
-        JOIN release r ON r.id = t.release_id
-        LEFT JOIN label l ON l.id = r.label_id
-        LEFT JOIN contributors_agg c ON c.track_id = t.id
-        LEFT JOIN rights_ranked rr ON rr.track_id = t.id
-        GROUP BY 
-            t.id, r.id, l.id, c.track_id, 
-            c.artist_name, c.track_artist_name, c.composer, c.lyricist, c.authors
-        ORDER BY r.upc, (t.meta->>'track_number')::int;
+        LEFT JOIN authors_flat af ON af.track_id = t.id
+        LEFT JOIN rights_agg ra ON ra.track_id = t.id
+        LEFT JOIN release r ON r.id = t.release_id
+        LEFT JOIN track_label tl ON tl.track_id = t.id
+        LEFT JOIN label l ON l.id = tl.label_id
+
+        
+        {where_clause} 
+        ORDER BY t.id;
     """
     
     try:
         with engine.connect() as conn:
-            df = pl.read_database(
-                query=query, 
-                connection=conn,
-                infer_schema_length=None 
-            )
+            # Use SQLAlchemy text with parameters
+            if label_id:
+                df = pl.read_database(
+                    query=text(query).params(label_id=label_id),
+                    connection=conn,
+                    infer_schema_length=None
+                )
+            else:
+                df = pl.read_database(
+                    query=query, 
+                    connection=conn,
+                    infer_schema_length=None
+                )
 
         if output_path:
             if output_path.endswith('.xlsx'):

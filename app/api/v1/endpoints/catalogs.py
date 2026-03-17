@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 import shutil
 import os
 from uuid import uuid4
@@ -71,12 +71,12 @@ async def check_upload_catalog():
 
 
 @router.post("/download")
-async def download_catalog(file: UploadFile = File(...)):
+async def download_catalog(file: UploadFile = File(...), label_id: int = Form(None)):
    
-    task_result = export_normalized_catalog_to_flat.delay("/app/storage/catalog_normalized.xlsx")
+    task_result = export_normalized_catalog_to_flat.delay("/app/storage/catalog_normalized.xlsx", label_id)
 
     return {
         "message": "Запущен процесс экспорта каталога",
         "task_id": task_result.id,
-       # "filename": file.filename
+        "label_id": label_id
     }
