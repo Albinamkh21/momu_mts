@@ -110,6 +110,7 @@ CREATE TABLE track_right (
     contract_id BIGINT NULL REFERENCES contract(id),
     right_holder_id INTEGER REFERENCES right_holder(id),
     right_category_id INTEGER REFERENCES right_category(id),
+    right_usage_type_id INTEGER REFERENCES right_usage_type(id),
     share_percentage NUMERIC(5,2) CHECK (share_percentage BETWEEN 0 AND 100)
 );
 
@@ -126,9 +127,54 @@ UNIQUE (track_id, label_id);
 
 
 
+
 CREATE INDEX idx_track_isrc ON track(isrc);
 CREATE INDEX idx_track_title_trgm ON track USING gin (title gin_trgm_ops);
 CREATE INDEX idx_person_name_trgm ON person USING gin (full_name gin_trgm_ops);
+
+
+CREATE TABLE IF NOT EXISTS track_release (
+    track_id INTEGER NOT NULL REFERENCES track(id) ON DELETE CASCADE,
+    release_id INTEGER NOT NULL REFERENCES release(id) ON DELETE CASCADE,
+    track_number TEXT, 
+    
+    PRIMARY KEY (track_id, release_id)
+);
+
+
+CREATE INDEX IF NOT EXISTS idx_track_release_release_id ON track_release(release_id);
+CREATE INDEX IF NOT EXISTS idx_track_release_track_id ON track_release(track_id);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+CREATE TABLE finding_source (
+    id SERIAL PRIMARY KEY,
+    code VARCHAR(50) UNIQUE NOT NULL, 
+    name VARCHAR(50),
+    description TEXT
+);
+
+insert into finding_source (code, name) values 
+('ISRC', 'ISRC'),
+('LABEL_OWN_CODE', 'LABEL_OWN_CODE'),
+('NAME', 'NAME'),
+('NAME+ARTIST', 'NAME+ARTIST'),
+('NAME+AUTHOR', 'NAME+AUTHOR');
 
 
 INSERT INTO right_usage_type (code, name) VALUES 
@@ -189,10 +235,8 @@ CREATE TABLE report (
     payout_amount NUMERIC(20, 4) DEFAULT 0.0,
     price_per_play NUMERIC(20, 6) DEFAULT 0.0,
     
-    -- Доли прав
-    author_share_pct NUMERIC(5, 2) DEFAULT 0.0,
-    related_share_pct NUMERIC(5, 2) DEFAULT 0.0,
-    
+
+    finding_source  INT NOT NULL REFERENCES finding_source(id) , 
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -222,6 +266,8 @@ VALUES
 ('Stellar Group Pty Ltd', 'Air Astana', 'Лицензионное соглашение о музыке на борту самолета от 3 декабря 2024г.', 4, '')
 
 ON CONFLICT (organization_name, service_name) DO NOTHING;
+
+alter table partners add column if not exists code varchar(50);
 
 
 INSERT INTO label (name, composition_count, phonogram_count)
@@ -282,3 +328,10 @@ ON track_contribution (track_id, person_id, role);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_track_right_unique 
 ON track_right (track_id, right_holder_id, right_category_id);
+
+
+
+
+/* Временная таблица для хранения промежуточных данных при загрузке из staging_catalog*/
+
+ALTER TABLE track_right  ADD COLUMN right_usage_type_id INTEGER REFERENCES right_usage_type(id);

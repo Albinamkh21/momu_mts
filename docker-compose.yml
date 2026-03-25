@@ -68,7 +68,7 @@ services:
     build: .
     container_name: momu_worker
     restart: always
-    command: celery -A core.celery_app  worker --loglevel=info
+    command: watchfiles --filter python "celery -A core.celery_app worker --loglevel=info"
     volumes:
       - ./app:/app
     environment:

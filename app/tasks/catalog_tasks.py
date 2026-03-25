@@ -199,9 +199,8 @@ def sync_catalog_dictionaries():
 
             # --- 5. ЗАПОЛНЯЕМ TRACK (треки) ---
             result_tracks = conn.execute(text("""
-                INSERT INTO track (release_id, isrc, label_own_code,  title, duration, explicit, resource_reference, meta)
+                INSERT INTO track (isrc, label_own_code, title, duration, explicit, resource_reference, meta)
                 SELECT DISTINCT ON (sc.id)
-                    r.id AS release_id,
                     NULLIF(TRIM(sc.isrc), '') AS isrc,
                     NULLIF(TRIM(sc.right_id), '') AS label_own_code,
                     COALESCE(NULLIF(TRIM(sc.track_name), ''), 'Unknown Track') AS title,
@@ -233,78 +232,82 @@ def sync_catalog_dictionaries():
                         'sales_start_date', NULLIF(TRIM(sc.sales_start_date), '')
                     ) AS meta
                 FROM staging_catalog sc
-                LEFT JOIN label l ON l.name = sc.label_name
-                LEFT JOIN release r ON (
-                CASE 
-                    WHEN NULLIF(TRIM(sc.upc), '') IS NOT NULL THEN r.upc = TRIM(sc.upc)
-                    ELSE r.title = NULLIF(TRIM(sc.album_name), '')
-                END
-
-                )
                 WHERE  
                 NOT EXISTS (
                 SELECT 1 FROM track t2 
                 WHERE (
                     -- Запись считается дубликатом, только если совпало ВСЁ, что заполнено
-                    (NULLIF(TRIM(sc.isrc), '') IS NOT NULL AND t2.isrc = TRIM(sc.isrc))
+                    (NULLIF(TRIM(sc.isrc), '') IS NOT NULL AND t2.isrc = sc.isrc)
                     AND 
-                    (NULLIF(TRIM(sc.right_id), '') IS NOT NULL AND t2.label_own_code = TRIM(sc.right_id))
+                    (NULLIF(TRIM(sc.right_id), '') IS NOT NULL AND t2.label_own_code = sc.right_id)
                 )
                 -- Если ISRC пустой, проверяем только по коду и имени
                     OR (
                         NULLIF(TRIM(sc.isrc), '') IS NULL 
-                        AND t2.label_own_code = TRIM(sc.right_id) 
-                        AND t2.title = TRIM(sc.track_name)
+                        AND t2.label_own_code = sc.right_id 
+                        AND t2.title = sc.track_name
                     )
                 )
-                ORDER BY sc.id, r.id;
+                ORDER BY sc.id;
                 """))
             tracks_count = result_tracks.rowcount
             print(f"✅ Tracks вставлено: {tracks_count}")
 
 
+            # --- ЭТАП СОЗДАНИЯ ОДНОЗНАЧНОЙ КАРТЫ (MAP) ---
+            conn.execute(text("""
+                DROP TABLE IF EXISTS tmp_track_map;
+                CREATE TEMP TABLE tmp_track_map AS
+                SELECT 
+                    sc.id AS staging_id,
+                    t.id AS track_id,
+                    r.id AS release_id
+                FROM staging_catalog sc
+                JOIN track t ON (
+                    -- ТА ЖЕ САМАЯ ЛОГИКА ДЛЯ ГАРАНТИИ СВЯЗИ
+                    (
+                        (NULLIF(TRIM(sc.isrc), '') IS NOT NULL AND t.isrc = TRIM(sc.isrc))
+                        AND (NULLIF(TRIM(sc.right_id), '') IS NOT NULL AND t.label_own_code = TRIM(sc.right_id))
+                    )
+                    OR (
+                        NULLIF(TRIM(sc.isrc), '') IS NULL 
+                        AND t.label_own_code = TRIM(sc.right_id) 
+                        AND t.title = TRIM(sc.track_name)
+                    )
+                )
+                LEFT JOIN release r ON r.upc = TRIM(sc.upc);
+                CREATE INDEX idx_tmp_map_sid ON tmp_track_map(staging_id);
+                """))
+
+
+            # --- 5.1 ЗАПОЛНЯЕМ TRACK_RELEASE (связь трек - релиз) ---
+            result_track_release = conn.execute(text("""
+                INSERT INTO track_release (track_id, release_id, track_number)
+                SELECT DISTINCT map.track_id, map.release_id, NULLIF(TRIM(sc.track_number), '')
+                FROM staging_catalog sc
+                JOIN tmp_track_map map ON map.staging_id = sc.id
+                WHERE map.release_id IS NOT NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM track_release tr
+                    WHERE tr.track_id = map.track_id
+                    AND tr.release_id = map.release_id
+                )
+                ON CONFLICT (track_id, release_id) DO NOTHING;
+            """))
+            track_release_count = result_track_release.rowcount
+            print(f"✅ Track_release вставлено: {track_release_count}")
 
             # --- 6. ЗАПОЛНЯЕМ TRACK_CONTRIBUTION (связь трек - участник) ---
             result_contributions = conn.execute(text("""
-               INSERT INTO track_contribution (track_id, person_id, role)
-                SELECT DISTINCT 
-                    t.id, 
-                    p.id, 
+                INSERT INTO track_contribution (track_id, person_id, role)
+                SELECT DISTINCT
+                    map.track_id,
+                    p.id,
                     unpivoted.role
                 FROM staging_catalog sc
-                JOIN track t ON t.isrc = sc.isrc AND t.label_own_code = sc.right_id
+                JOIN tmp_track_map map ON map.staging_id = sc.id
                 CROSS JOIN LATERAL (
-                    VALUES 
-                        (sc.artist_name, 'artist_name'),
-                        (sc.track_artist_name, 'track_artist_name'),
-                        (sc.composer, 'composer'),
-                        (sc.lyricist, 'lyricist'),
-                        (sc.authors, 'authors')
-                ) AS unpivoted(val, role)
-                CROSS JOIN LATERAL unnest(string_to_array(unpivoted.val, ',')) AS raw_name
-                JOIN person p ON p.full_name = TRIM(raw_name)
-                WHERE sc.isrc IS NOT NULL AND unpivoted.val IS NOT NULL AND unpivoted.val != ''
-                ON CONFLICT (track_id, person_id, role) DO NOTHING;
-
-          
-                """))
-
-            contributions_count = result_contributions.rowcount
-            print(f"✅ Track contributions вставлено: {contributions_count}")
-
-
-            result_contributions = conn.execute(text("""
-               INSERT INTO track_contribution (track_id, person_id, role)
-                SELECT DISTINCT ON (t.id, p.id, unpivoted.role)
-                    t.id AS track_id, 
-                    p.id AS person_id, 
-                    unpivoted.role
-                FROM staging_catalog sc
-            
-                JOIN track t ON t.label_own_code = sc.right_id 
-                    AND t.title = sc.track_name AND t.isrc is NULL
-                CROSS JOIN LATERAL (
-                    VALUES 
+                    VALUES
                         (sc.artist_name, 'artist_name'),
                         (sc.track_artist_name, 'track_artist_name'),
                         (sc.composer, 'composer'),
@@ -314,17 +317,8 @@ def sync_catalog_dictionaries():
                 CROSS JOIN LATERAL unnest(string_to_array(unpivoted.val, ',')) AS raw_name
                 JOIN person p ON p.full_name = TRIM(raw_name)
                 WHERE unpivoted.val IS NOT NULL AND unpivoted.val != ''
-                 AND NOT EXISTS (
-                    SELECT 1 FROM track_contribution tc 
-                    WHERE tc.track_id = t.id 
-                    AND tc.person_id = p.id 
-                    AND tc.role = unpivoted.role
-                )    
-                                ORDER BY t.id, p.id, unpivoted.role
-                ;
-
-          
-                """))
+                ON CONFLICT (track_id, person_id, role) DO NOTHING;
+            """))
 
             contributions_count = result_contributions.rowcount
             print(f"✅ Track contributions вставлено: {contributions_count}")
@@ -343,54 +337,28 @@ def sync_catalog_dictionaries():
             track_rights_count = 0
             for holder_col, share_col, cat_name in mapping:
                 sql = f"""
-                INSERT INTO track_right (track_id, contract_id, right_holder_id, right_category_id, share_percentage)
-                SELECT DISTINCT ON (t.id, rh.id, rc.id)
-                    t.id,
+                INSERT INTO track_right (track_id, contract_id, right_holder_id, right_category_id, right_usage_type_id, share_percentage)
+                SELECT DISTINCT ON (map.track_id, rh.id, rc.id, rut.id)
+                    map.track_id,
                     NULL::BIGINT,
                     rh.id,
                     rc.id,
+                    rut.id,
                     COALESCE(NULLIF(REGEXP_REPLACE(TRIM(sc.{share_col}::text), '[^0-9.]', '', 'g'), '')::NUMERIC, 0.0)
                 FROM staging_catalog sc
-                JOIN track t ON t.isrc = sc.isrc and t.isrc is NOT NULL
+                JOIN tmp_track_map map ON map.staging_id = sc.id
                 JOIN right_holder rh ON rh.name = TRIM(sc.{holder_col})
                 JOIN right_category rc ON rc.name = '{cat_name}'
+                JOIN right_usage_type rut ON rut.code = sc.types_of_rights
                 WHERE sc.{holder_col} IS NOT NULL AND TRIM(sc.{holder_col}) != ''
                 AND NOT EXISTS (
                     SELECT 1 FROM track_right tr
-                    WHERE tr.track_id = t.id 
-                    AND tr.right_holder_id = rh.id 
+                    WHERE tr.track_id = map.track_id
+                    AND tr.right_holder_id = rh.id
                     AND tr.right_category_id = rc.id
+                    AND tr.right_usage_type_id = rut.id
                 )
-                ORDER BY t.id, rh.id, rc.id;
-                """
-                result = conn.execute(text(sql))
-                count = result.rowcount
-                track_rights_count += count
-                print(f"✅ В {cat_name} ({holder_col}) вставлено: {count}")
-
-            print(f"🏁 ИТОГО вставлено в track_right: {track_rights_count}")
-
-            for holder_col, share_col, cat_name in mapping:
-                sql = f"""
-                INSERT INTO track_right (track_id, contract_id, right_holder_id, right_category_id, share_percentage)
-                SELECT DISTINCT ON (t.id, rh.id, rc.id)
-                    t.id,
-                    NULL::BIGINT,
-                    rh.id,
-                    rc.id,
-                    COALESCE(NULLIF(REGEXP_REPLACE(TRIM(sc.{share_col}::text), '[^0-9.]', '', 'g'), '')::NUMERIC, 0.0)
-                FROM staging_catalog sc
-                JOIN track t ON ( t.isrc is NULL and t.label_own_code = sc.right_id )
-                JOIN right_holder rh ON rh.name = TRIM(sc.{holder_col})
-                JOIN right_category rc ON rc.name = '{cat_name}'
-                WHERE sc.{holder_col} IS NOT NULL AND TRIM(sc.{holder_col}) != ''
-                AND NOT EXISTS (
-                    SELECT 1 FROM track_right tr
-                    WHERE tr.track_id = t.id 
-                    AND tr.right_holder_id = rh.id 
-                    AND tr.right_category_id = rc.id
-                )
-                ORDER BY t.id, rh.id, rc.id;
+                ORDER BY map.track_id, rh.id, rc.id, rut.id;
                 """
                 result = conn.execute(text(sql))
                 count = result.rowcount
@@ -401,20 +369,13 @@ def sync_catalog_dictionaries():
 
 
 
-              # --- 8. ЗАПОЛНЯЕМ TRACK_LABEL (связь трек - участник) ---
+              # --- 8. ЗАПОЛНЯЕМ TRACK_LABEL (связь трек - лейбл) ---
             result_track_label = conn.execute(text("""
                 INSERT INTO track_label (track_id, label_id)
-                SELECT DISTINCT t.id, l.id
+                SELECT DISTINCT map.track_id, l.id
                 FROM staging_catalog sc
+                JOIN tmp_track_map map ON map.staging_id = sc.id
                 JOIN label l ON l.name = sc.label_name
-                JOIN track t ON (
-                    (NULLIF(sc.isrc, '') IS NOT NULL 
-                    AND t.isrc = sc.isrc  )
-                    OR 
-                    (NULLIF(sc.isrc, '') IS NULL 
-                    AND t.label_own_code = sc.right_id 
-                   )
-                )
                 WHERE sc.label_name IS NOT NULL AND sc.label_name != ''
                 ON CONFLICT (track_id, label_id) DO NOTHING;
             """))
@@ -432,6 +393,7 @@ def sync_catalog_dictionaries():
                     "right_holders": rights_count,
                     "releases": releases_count,
                     "tracks": tracks_count,
+                    "track_releases": track_release_count,
                     "track_contributions": contributions_count,
                     "track_rights": track_rights_count
                 }

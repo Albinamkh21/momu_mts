@@ -13,3 +13,5 @@ psycopg2-binary
 adbc-driver-postgresql
 xlsxwriter
 
+watchfiles
+

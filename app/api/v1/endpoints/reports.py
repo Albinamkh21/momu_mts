@@ -1,10 +1,14 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel, Field
 import shutil
 import os
 from uuid import uuid4
 from celery import chain
-from tasks.report_tasks import process_report_file, update_catalog_dictionaries_from_report, insert_data_into_final_report_table, group_report_data
+from tasks.report_tasks import (
+    process_report_file, update_catalog_dictionaries_from_report,
+    insert_data_into_final_report_table, group_report_data, find_lost_track,
+    process_full_report_pipeline
+)
 
 router = APIRouter()
 
@@ -50,37 +54,52 @@ async def upload_report(file: UploadFile = File(...)):
 
 
 @router.post("/get_report_data")
-async def get_report_data_endpoint(data: ReportDataRequest):
+async def get_report_data_endpoint(
+    file: UploadFile = File(...),
+    partner_id: int = Form(...),
+    right_category_id: int = Form(...),
+    right_usage_type_id: int = Form(...),
+    month: int = Form(..., ge=1, le=12),
+    year: int = Form(...),
+):
     """
-    Эндпоинт для переноса данных из staging_report в итоговую таблицу report.
-    Параметры:
-    - partner_id: ID партнёра
-    - right_category_id: ID категории прав (из таблицы right_category)
-    - right_usage_type_id: ID типа использования прав (из таблицы right_usage_type)
-    - month: порядковый номер месяца (1-12)
-    - year: год (например 2025, 2026)
+    Полный пайплайн обработки отчёта:
+    1. Очистка staging_report и staging_report_agg
+    2. Загрузка файла и парсинг (process_report_file)
+    3. Обновление словарей каталога (update_catalog_dictionaries_from_report)
+    4. Группировка данных (group_report_data)
+    5. Проверка sum(payout_amount) staging_report == staging_report_agg
+    6. Перенос в итоговую таблицу report (insert_data_into_final_report_table)
     """
+    if not file.filename.endswith(('.xlsx', '.csv')):
+        raise HTTPException(status_code=400, detail="Неверный тип файла. Допустимы .xlsx и .csv")
+
+    file_id = str(uuid4())
+    file_ext = os.path.splitext(file.filename)[1]
+    file_path = os.path.join(STORAGE_DIR, f"{file_id}{file_ext}")
+
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
     try:
-        task_result = insert_data_into_final_report_table.delay(
-            data.partner_id,
-            data.right_category_id,
-            data.right_usage_type_id,
-            data.month,
-            data.year
+        task_result = process_full_report_pipeline.delay(
+            file_path, partner_id, right_category_id,
+            right_usage_type_id, month, year
         )
         return {
-            "message": "Задача переноса данных в итоговую таблицу report запущена",
+            "message": "Полный пайплайн обработки отчёта запущен",
             "task_id": task_result.id,
+            "filename": file.filename,
             "params": {
-                "partner_id": data.partner_id,
-                "right_category_id": data.right_category_id,
-                "right_usage_type_id": data.right_usage_type_id,
-                "month": data.month,
-                "year": data.year
+                "partner_id": partner_id,
+                "right_category_id": right_category_id,
+                "right_usage_type_id": right_usage_type_id,
+                "month": month,
+                "year": year
             }
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка при запуске задачи: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Ошибка при запуске пайплайна: {str(e)}")
 
 
 @router.post("/group_report_data")
@@ -100,4 +119,22 @@ async def group_report_data_endpoint():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка при запуске группировки: {str(e)}")
+
+
+@router.post("/find_lost_track")
+async def find_lost_track_endpoint():
+    """
+    Эндпоинт для поиска треков из staging_report_agg, которые не найдены в таблице track.
+    Результат экспортируется в файл lost_tracks.xlsx.
+    """
+    try:
+        task_result = find_lost_track.delay()
+
+        return {
+            "message": "Задача поиска потерянных треков запущена",
+            "task_id": task_result.id,
+            "description": "Результат будет экспортирован в файл lost_tracks.xlsx"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка при запуске поиска потерянных треков: {str(e)}")
 
