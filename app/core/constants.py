@@ -22,3 +22,9 @@ class FindingSource:
     NAME = 3
     NAME_ARTIST = 4
     NAME_AUTHOR = 5
+    NAME_ARTIST_NORM = 6
+    NAME_AUTHOR_NORM = 7
+    NAME_ARTIST_NORM_PARTLY = 8
+    NAME_AUTHOR_NORM_PARTLY = 9
+   
+  

@@ -5,7 +5,7 @@ services:
     image: postgres:15-alpine
     container_name: momu_postgres
     restart: always
-    shm_size: 256mb
+    shm_size: 1gb
     env_file:
       - .env
     environment:

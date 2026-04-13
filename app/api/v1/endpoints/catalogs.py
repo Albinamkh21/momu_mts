@@ -3,7 +3,7 @@ import shutil
 import os
 from uuid import uuid4
 from celery import chain
-from tasks.catalog_tasks import process_catalog_file, sync_catalog_dictionaries, check_catalog_integrity,export_normalized_catalog_to_flat
+from tasks.catalog_tasks import process_catalog_file, sync_catalog_dictionaries, check_catalog_integrity, export_normalized_catalog_to_flat, delete_data_from_all_dictionaries_by_label
 from tasks.report_tasks import update_catalog_dictionaries_from_report
 
 router = APIRouter()
@@ -25,10 +25,10 @@ async def upload_catalog(file: UploadFile = File(...)):
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-
+    userId = "albina"
     workflow = chain(
-        process_catalog_file.s(file_path), 
-        sync_catalog_dictionaries.si(),
+        process_catalog_file.s(file_path, userId, file.filename),
+        sync_catalog_dictionaries.s(),
       
     )
  
@@ -77,6 +77,18 @@ async def download_catalog(file: UploadFile = File(...), label_id: int = Form(No
 
     return {
         "message": "Запущен процесс экспорта каталога",
+        "task_id": task_result.id,
+        "label_id": label_id
+    }
+
+
+@router.delete("/label/{label_id}")
+async def delete_label_data(label_id: int):
+    """Удаляет все данные о треках и связях для указанного лейбла."""
+    task_result = delete_data_from_all_dictionaries_by_label.delay(label_id)
+
+    return {
+        "message": "Запущен процесс удаления данных по лейблу",
         "task_id": task_result.id,
         "label_id": label_id
     }

@@ -1,21 +1,116 @@
 import os
+import uuid
+from datetime import datetime
+import time
 import polars as pl
+from polars import lit
 from sqlalchemy import create_engine, text
 from core.celery_app import celery_app
+from .utils import clean_null_bytes
+from .catalog_tasks_v2 import (
+    _sync_labels_v2,
+    _sync_persons_v2,
+    _sync_releases_v2,
+    _sync_tracks_v2,
+    _build_track_map_v2,
+    _sync_track_releases_v2,
+    _sync_track_contributions_v2,
+    _sync_track_labels_v2,
+    _cleanup_staging_v2
+)
 
+def _sync_right_holders_v1(conn, upload_id):
+    """3. ЗАПОЛНЯЕМ RIGHT_HOLDER для v1"""
+    t0 = time.time()
+    result_rights = conn.execute(
+        text("""
+        WITH right_holder_names AS (
+            SELECT DISTINCT TRIM(ar_label_treaty_number_1) AS name FROM staging_catalog WHERE ar_label_treaty_number_1 IS NOT NULL AND TRIM(ar_label_treaty_number_1) != '' AND upload_id = :upload_id
+            UNION
+            SELECT DISTINCT TRIM(ar_label_treaty_number_2) AS name FROM staging_catalog WHERE ar_label_treaty_number_2 IS NOT NULL AND TRIM(ar_label_treaty_number_2) != '' AND upload_id = :upload_id
+            UNION
+            SELECT DISTINCT TRIM(ar_label_treaty_number_3) AS name FROM staging_catalog WHERE ar_label_treaty_number_3 IS NOT NULL AND TRIM(ar_label_treaty_number_3) != '' AND upload_id = :upload_id
+            UNION
+            SELECT DISTINCT TRIM(rr_label_treaty_number_1) AS name FROM staging_catalog WHERE rr_label_treaty_number_1 IS NOT NULL AND TRIM(rr_label_treaty_number_1) != '' AND upload_id = :upload_id
+            UNION
+            SELECT DISTINCT TRIM(rr_label_treaty_number_2) AS name FROM staging_catalog WHERE rr_label_treaty_number_2 IS NOT NULL AND TRIM(rr_label_treaty_number_2) != '' AND upload_id = :upload_id
+            UNION
+            SELECT DISTINCT TRIM(rr_label_treaty_number_3) AS name FROM staging_catalog WHERE rr_label_treaty_number_3 IS NOT NULL AND TRIM(rr_label_treaty_number_3) != '' AND upload_id = :upload_id
+        )
+        INSERT INTO right_holder (name)
+        SELECT name FROM right_holder_names
+        ON CONFLICT (name) DO NOTHING
+        RETURNING id;
+        """), {"upload_id": upload_id}
+    )
+    count = result_rights.rowcount
+    elapsed = time.time() - t0
+    print(f"✅ Right holders (v1) вставлено: {count} ({elapsed:.1f} сек)")
+    return count
+
+def _sync_track_rights_v1(conn, upload_id):
+    """7. ЗАПОЛНЯЕМ TRACK_RIGHT для v1"""
+    t0 = time.time()
+    mapping = [
+        ("ar_label_treaty_number_1", "author_right_1", "Author"),
+        ("ar_label_treaty_number_2", "author_right_2", "Author"),
+        ("ar_label_treaty_number_3", "author_right_3", "Author"),
+        ("rr_label_treaty_number_1", "related_right_id_1", "Related"),
+        ("rr_label_treaty_number_2", "related_right_id_2", "Related"),
+        ("rr_label_treaty_number_3", "related_right_id_3", "Related"),
+    ]
+    track_rights_count = 0
+    for holder_col, share_col, cat_name in mapping:
+        sql = f"""
+        INSERT INTO track_right (track_id, contract_id, right_holder_id, right_category_id, right_usage_type_id, share_percentage)
+        SELECT DISTINCT ON (map.track_id, rh.id, rc.id, rut.id)
+            map.track_id,
+            NULL::BIGINT,
+            rh.id,
+            rc.id,
+            rut.id,
+            COALESCE(NULLIF(REGEXP_REPLACE(TRIM(sc.{share_col}::text), '[^0-9.]', '', 'g'), '')::NUMERIC, 0.0)
+        FROM staging_catalog sc
+        JOIN tmp_track_map map ON map.staging_id = sc.id
+        JOIN right_holder rh ON rh.name = TRIM(sc.{holder_col})
+        JOIN right_category rc ON rc.name = '{cat_name}'
+        JOIN right_usage_type rut ON rut.code = sc.types_of_rights
+        WHERE sc.{holder_col} IS NOT NULL AND TRIM(sc.{holder_col}) != ''
+        AND sc.upload_id = :upload_id
+        AND NOT EXISTS (
+            SELECT 1 FROM track_right tr
+            WHERE tr.track_id = map.track_id
+            AND tr.right_holder_id = rh.id
+            AND tr.right_category_id = rc.id
+            AND tr.right_usage_type_id = rut.id
+        )
+        ORDER BY map.track_id, rh.id, rc.id, rut.id;
+        """
+        result = conn.execute(text(sql), {"upload_id": upload_id})
+        count = result.rowcount
+        track_rights_count += count
+        print(f"✅ В {cat_name} ({holder_col}) вставлено: {count}")
+    elapsed = time.time() - t0
+    print(f"🏁 ИТОГО вставлено в track_right (v1): {track_rights_count} ({elapsed:.1f} сек)")
+    return track_rights_count
 DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 
-@celery_app.task(name="process_catalog_file")
-def process_catalog_file(file_path: str):
+@celery_app.task(name="process_catalog_file", bind=True)
+def process_catalog_file(self, file_path: str, user_id: str, original_filename: str = ""):
+    print(f"📂 Task process_catalog_file[{self.request.id}] файл: {original_filename}")
     if not os.path.exists(file_path):
         return {"status": "error", "message": "File not found"}
 
+    upload_id = str(uuid.uuid4())
+    start_time = datetime.now()    
+
     try:
         with engine.begin() as conn:
-            conn.execute(text("TRUNCATE TABLE staging_catalog"))
+            pass
+            #conn.execute(text("TRUNCATE TABLE staging_catalog"))
 
-        df = pl.read_excel(file_path) 
+        df = pl.read_excel(file_path, infer_schema_length=0) 
         
         total_rows = len(df)
         chunk_size = 50000
@@ -32,7 +127,8 @@ def process_catalog_file(file_path: str):
             "types_of_rights", "countries", "create_date", "release_date",
             "sales_start_date", "has_ringtone", "ringtone_upc", "ringtone_isrc",
             "has_vclip", "vclip_isrc", "video_upc", "has_lyrics", "has_ttml",
-            "effective_date", "termination_date", "active_inactive", "resource_reference"
+            "effective_date", "termination_date", "active_inactive", "resource_reference",
+            "track_id", "track_song_id"
         ]
 
         for i in range(0, total_rows, chunk_size):
@@ -41,17 +137,49 @@ def process_catalog_file(file_path: str):
             chunk.columns = db_columns
             
             chunk = clean_null_bytes(chunk)
+
+            # Обрабатываем поле isrc - берём только первую часть до точки с запятой
+            chunk = chunk.with_columns(
+                pl.col("isrc")
+                .str.split(";")
+                .list.first()
+                .str.strip_chars()
+                .alias("isrc")
+            )
+
+            chunk = chunk.with_columns(
+                pl.col("explicit")
+                .str.to_lowercase()
+                .str.strip_chars()
+                .is_in(["true", "yes", "1", "explicit", "да"])
+                .fill_null(False)
+                .cast(pl.String)
+                .alias("explicit")
+            )
+
+            chunk = chunk.with_columns(
+                pl.col("duration").map_elements(
+                    lambda x: f"00:{x}" if x and len(x) <= 5 else x,
+                    return_dtype=pl.String
+                )
+            )
+
+            chunk = chunk.with_columns([
+                pl.lit(upload_id).alias("upload_id"),
+                pl.lit(user_id).alias("user_id"), 
+                pl.lit(start_time).alias("created_at")
+            ])
             
             chunk.write_database(
                 table_name="staging_catalog",
                 connection=DATABASE_URL,
                 if_table_exists="append",
-               engine="adbc"
+                engine="adbc"
             )
             print(f"📦 Загружен батч: {i} - {i + len(chunk)}")
 
         os.remove(file_path)
-        return {"status": "success", "total_rows": total_rows}
+        return {"status": "success", "total_rows": total_rows, "upload_id": upload_id}
 
     except Exception as e:
         print(f"❌ Ошибка воркера: {str(e)}")
@@ -59,331 +187,27 @@ def process_catalog_file(file_path: str):
 
 
 @celery_app.task(name="sync_catalog_dictionaries")
-def sync_catalog_dictionaries():
+def sync_catalog_dictionaries(prev_result):
+    upload_id = prev_result.get("upload_id") if isinstance(prev_result, dict) else prev_result
+    staging_table = "staging_catalog"
     try:
         with engine.begin() as conn:
             print("📋 Начинаем синхронизацию справочников...")
-            
-            # --- 1. ЗАПОЛНЯЕМ LABEL ---
-            result_labels = conn.execute(text("""
-                INSERT INTO label (name) 
-                SELECT DISTINCT TRIM(s.label_name)
-                FROM staging_catalog s
-                WHERE s.label_name IS NOT NULL 
-                AND TRIM(s.label_name) != ''
-                AND NOT EXISTS (
-                     SELECT 1 FROM label l 
-                     WHERE l.name = TRIM(s.label_name)
-                 )
-                RETURNING id;
-            """))
-            labels_count = result_labels.rowcount
-            print(f"✅ Labels вставлено: {labels_count}")
 
-            # --- 2. ЗАПОЛНЯЕМ PERSON (из 4-х колонок) ---
-            result_persons = conn.execute(text("""
-              WITH person_names AS (
-                SELECT DISTINCT TRIM(unnest(clean_and_split(artist_name))) AS name
-                FROM staging_catalog WHERE artist_name IS NOT NULL AND artist_name != ''
-                
-                UNION
-                
-                SELECT DISTINCT TRIM(unnest(clean_and_split(track_artist_name))) AS name
-                FROM staging_catalog WHERE track_artist_name IS NOT NULL AND track_artist_name != ''
-                
-                UNION
-                
-                SELECT DISTINCT TRIM(unnest(clean_and_split(composer))) AS name
-                FROM staging_catalog WHERE composer IS NOT NULL AND composer != ''
-                
-                UNION
-                
-                SELECT DISTINCT TRIM(unnest(clean_and_split(lyricist))) AS name
-                FROM staging_catalog WHERE lyricist IS NOT NULL AND lyricist != ''
-                
-                UNION
-                
-                SELECT DISTINCT TRIM(unnest(clean_and_split(authors))) AS name
-                FROM staging_catalog WHERE authors IS NOT NULL AND authors != ''
-            )
-            INSERT INTO person (full_name)
-            SELECT DISTINCT name 
-            FROM person_names 
-            WHERE name IS NOT NULL AND name != ''
-             ON CONFLICT (full_name) DO NOTHING
-                """))
-            persons_count = result_persons.rowcount
-            print(f"✅ Persons вставлено: {persons_count}")
+            labels_count = _sync_labels_v2(conn, upload_id, staging_table)
+            persons_count = _sync_persons_v2(conn, upload_id, staging_table)
+            rights_count = _sync_right_holders_v1(conn, upload_id)
+            releases_count = _sync_releases_v2(conn, upload_id, staging_table)
+            tracks_count = _sync_tracks_v2(conn, upload_id, staging_table)
 
-            # --- 3. ЗАПОЛНЯЕМ RIGHT_HOLDER ---
-            result_rights = conn.execute(text("""
-                WITH right_holder_names AS (
-                    SELECT DISTINCT TRIM(ar_label_treaty_number_1) AS name
-                    FROM staging_catalog 
-                    WHERE ar_label_treaty_number_1 IS NOT NULL AND TRIM(ar_label_treaty_number_1) != ''
-                    
-                    UNION
-                    
-                    SELECT DISTINCT TRIM(ar_label_treaty_number_2) AS name
-                    FROM staging_catalog 
-                    WHERE ar_label_treaty_number_2 IS NOT NULL AND TRIM(ar_label_treaty_number_2) != ''
-                    
-                    UNION
-                    
-                    SELECT DISTINCT TRIM(ar_label_treaty_number_3) AS name
-                    FROM staging_catalog 
-                    WHERE ar_label_treaty_number_3 IS NOT NULL AND TRIM(ar_label_treaty_number_3) != ''
-                    
-                    UNION
-                    
-                    SELECT DISTINCT TRIM(rr_label_treaty_number_1) AS name
-                    FROM staging_catalog 
-                    WHERE rr_label_treaty_number_1 IS NOT NULL AND TRIM(rr_label_treaty_number_1) != ''
-                    
-                    UNION
-                    
-                    SELECT DISTINCT TRIM(rr_label_treaty_number_2) AS name
-                    FROM staging_catalog 
-                    WHERE rr_label_treaty_number_2 IS NOT NULL AND TRIM(rr_label_treaty_number_2) != ''
-                    
-                    UNION
-                    
-                    SELECT DISTINCT TRIM(rr_label_treaty_number_3) AS name
-                    FROM staging_catalog 
-                    WHERE rr_label_treaty_number_3 IS NOT NULL AND TRIM(rr_label_treaty_number_3) != ''
-                )
-                INSERT INTO right_holder (name)
-                SELECT name 
-                FROM right_holder_names
-                ON CONFLICT (name) DO NOTHING
-                RETURNING id;
-            """))
-            rights_count = result_rights.rowcount
-            print(f"✅ Right holders вставлено: {rights_count}")
+            _build_track_map_v2(conn, upload_id, staging_table)
 
-            # --- 4. ЗАПОЛНЯЕМ RELEASE (релизы/альбомы) ---
-            result_releases = conn.execute(text("""
-                WITH release_candidates AS (
-                    SELECT DISTINCT
-                        NULLIF(TRIM(sc.upc), '') AS upc,
-                        COALESCE(NULLIF(TRIM(sc.album_name), ''), 'Unknown Album') AS title,
-                        CASE 
-                            WHEN NULLIF(TRIM(sc.release_date), '') IS NOT NULL 
-                            THEN CAST(TRIM(sc.release_date) AS DATE)
-                            ELSE NULL 
-                        END AS release_date,
-                        l.id AS label_id,
-                        1 AS status,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY NULLIF(TRIM(sc.upc), '') 
-                            ORDER BY 
-                                CASE WHEN l.id IS NOT NULL THEN 1 ELSE 2 END,  -- приоритет записям с label_id
-                                CASE WHEN NULLIF(TRIM(sc.release_date), '') IS NOT NULL THEN 1 ELSE 2 END,  -- приоритет с датой
-                                sc.id  -- стабильный порядок для одинаковых случаев
-                        ) AS rn
-                    FROM staging_catalog sc
-                    LEFT JOIN label l ON l.name = TRIM(sc.label_name)
-                    WHERE COALESCE(NULLIF(TRIM(sc.album_name), ''), 'Unknown Album') IS NOT NULL
-                      AND NULLIF(TRIM(sc.upc), '') IS NOT NULL  -- только записи с UPC
-                )
-                INSERT INTO release (upc, title, release_date, label_id, status)
-                SELECT upc, title, release_date, label_id, status
-                FROM release_candidates 
-                WHERE rn = 1  -- берём только первую запись для каждого UPC
-                
-                ON CONFLICT (upc) DO NOTHING
-                RETURNING id;
-            """))
-            releases_count = result_releases.rowcount
-            print(f"✅ Releases вставлено: {releases_count}")
+            track_release_count = _sync_track_releases_v2(conn, upload_id, staging_table)
+            contributions_count = _sync_track_contributions_v2(conn, upload_id, staging_table)
+            track_rights_count = _sync_track_rights_v1(conn, upload_id)
+            _sync_track_labels_v2(conn, upload_id, staging_table)
 
-            # --- 5. ЗАПОЛНЯЕМ TRACK (треки) ---
-            result_tracks = conn.execute(text("""
-                INSERT INTO track (isrc, label_own_code, title, duration, explicit, resource_reference, meta)
-                SELECT DISTINCT ON (sc.id)
-                    NULLIF(TRIM(sc.isrc), '') AS isrc,
-                    NULLIF(TRIM(sc.right_id), '') AS label_own_code,
-                    COALESCE(NULLIF(TRIM(sc.track_name), ''), 'Unknown Track') AS title,
-                    CASE 
-                        WHEN sc.duration ~ '^[0-9]+:[0-9]+:[0-9]+$' THEN 
-                            CAST(sc.duration AS INTERVAL)
-                        WHEN sc.duration ~ '^[0-9]+:[0-9]+$' THEN 
-                            CAST('00:' || sc.duration AS INTERVAL)
-                        ELSE NULL 
-                    END AS duration,
-                    CASE 
-                        WHEN LOWER(TRIM(sc.explicit)) IN ('true', 'yes', '1', 'explicit') THEN TRUE
-                        ELSE FALSE 
-                    END AS explicit,
-                    NULLIF(TRIM(sc.resource_reference), '') AS resource_reference,
-                    JSONB_BUILD_OBJECT(
-                        'track_number', NULLIF(TRIM(sc.track_number), ''),
-                        'genre', NULLIF(TRIM(sc.genre_name), ''),
-                        'has_ringtone', NULLIF(TRIM(sc.has_ringtone), ''),
-                        'ringtone_upc', NULLIF(TRIM(sc.ringtone_upc), ''),
-                        'ringtone_isrc', NULLIF(TRIM(sc.ringtone_isrc), ''),
-                        'has_vclip', NULLIF(TRIM(sc.has_vclip), ''),
-                        'vclip_isrc', NULLIF(TRIM(sc.vclip_isrc), ''),
-                        'video_upc', NULLIF(TRIM(sc.video_upc), ''),
-                        'has_lyrics', NULLIF(TRIM(sc.has_lyrics), ''),
-                        'has_ttml', NULLIF(TRIM(sc.has_ttml), ''),
-                        'countries', NULLIF(TRIM(sc.countries), ''),
-                        'types_of_rights', NULLIF(TRIM(sc.types_of_rights), ''),
-                        'sales_start_date', NULLIF(TRIM(sc.sales_start_date), '')
-                    ) AS meta
-                FROM staging_catalog sc
-                WHERE  
-                NOT EXISTS (
-                SELECT 1 FROM track t2 
-                WHERE (
-                    -- Запись считается дубликатом, только если совпало ВСЁ, что заполнено
-                    (NULLIF(TRIM(sc.isrc), '') IS NOT NULL AND t2.isrc = sc.isrc)
-                    AND 
-                    (NULLIF(TRIM(sc.right_id), '') IS NOT NULL AND t2.label_own_code = sc.right_id)
-                )
-                -- Если ISRC пустой, проверяем только по коду и имени
-                    OR (
-                        NULLIF(TRIM(sc.isrc), '') IS NULL 
-                        AND t2.label_own_code = sc.right_id 
-                        AND t2.title = sc.track_name
-                    )
-                )
-                ORDER BY sc.id;
-                """))
-            tracks_count = result_tracks.rowcount
-            print(f"✅ Tracks вставлено: {tracks_count}")
-
-
-            # --- ЭТАП СОЗДАНИЯ ОДНОЗНАЧНОЙ КАРТЫ (MAP) ---
-            conn.execute(text("""
-                DROP TABLE IF EXISTS tmp_track_map;
-                CREATE TEMP TABLE tmp_track_map AS
-                SELECT 
-                    sc.id AS staging_id,
-                    t.id AS track_id,
-                    r.id AS release_id
-                FROM staging_catalog sc
-                JOIN track t ON (
-                    -- ТА ЖЕ САМАЯ ЛОГИКА ДЛЯ ГАРАНТИИ СВЯЗИ
-                    (
-                        (NULLIF(TRIM(sc.isrc), '') IS NOT NULL AND t.isrc = TRIM(sc.isrc))
-                        AND (NULLIF(TRIM(sc.right_id), '') IS NOT NULL AND t.label_own_code = TRIM(sc.right_id))
-                    )
-                    OR (
-                        NULLIF(TRIM(sc.isrc), '') IS NULL 
-                        AND t.label_own_code = TRIM(sc.right_id) 
-                        AND t.title = TRIM(sc.track_name)
-                    )
-                )
-                LEFT JOIN release r ON r.upc = TRIM(sc.upc);
-                CREATE INDEX idx_tmp_map_sid ON tmp_track_map(staging_id);
-                """))
-
-
-            # --- 5.1 ЗАПОЛНЯЕМ TRACK_RELEASE (связь трек - релиз) ---
-            result_track_release = conn.execute(text("""
-                INSERT INTO track_release (track_id, release_id, track_number)
-                SELECT DISTINCT map.track_id, map.release_id, NULLIF(TRIM(sc.track_number), '')
-                FROM staging_catalog sc
-                JOIN tmp_track_map map ON map.staging_id = sc.id
-                WHERE map.release_id IS NOT NULL
-                AND NOT EXISTS (
-                    SELECT 1 FROM track_release tr
-                    WHERE tr.track_id = map.track_id
-                    AND tr.release_id = map.release_id
-                )
-                ON CONFLICT (track_id, release_id) DO NOTHING;
-            """))
-            track_release_count = result_track_release.rowcount
-            print(f"✅ Track_release вставлено: {track_release_count}")
-
-            # --- 6. ЗАПОЛНЯЕМ TRACK_CONTRIBUTION (связь трек - участник) ---
-            result_contributions = conn.execute(text("""
-                INSERT INTO track_contribution (track_id, person_id, role)
-                SELECT DISTINCT
-                    map.track_id,
-                    p.id,
-                    unpivoted.role
-                FROM staging_catalog sc
-                JOIN tmp_track_map map ON map.staging_id = sc.id
-                CROSS JOIN LATERAL (
-                    VALUES
-                        (sc.artist_name, 'artist_name'),
-                        (sc.track_artist_name, 'track_artist_name'),
-                        (sc.composer, 'composer'),
-                        (sc.lyricist, 'lyricist'),
-                        (sc.authors, 'authors')
-                ) AS unpivoted(val, role)
-                CROSS JOIN LATERAL unnest(string_to_array(unpivoted.val, ',')) AS raw_name
-                JOIN person p ON p.full_name = TRIM(raw_name)
-                WHERE unpivoted.val IS NOT NULL AND unpivoted.val != ''
-                ON CONFLICT (track_id, person_id, role) DO NOTHING;
-            """))
-
-            contributions_count = result_contributions.rowcount
-            print(f"✅ Track contributions вставлено: {contributions_count}")
-
-
-
-            # --- 7. ЗАПОЛНЯЕМ TRACK_RIGHT (права на треки) ---
-            mapping = [
-                ("ar_label_treaty_number_1", "author_right_1", "Author"),
-                ("ar_label_treaty_number_2", "author_right_2", "Author"),
-                ("ar_label_treaty_number_3", "author_right_3", "Author"),
-                ("rr_label_treaty_number_1", "related_right_id_1", "Related"),
-                ("rr_label_treaty_number_2", "related_right_id_2", "Related"),
-                ("rr_label_treaty_number_3", "related_right_id_3", "Related"),
-            ]
-            track_rights_count = 0
-            for holder_col, share_col, cat_name in mapping:
-                sql = f"""
-                INSERT INTO track_right (track_id, contract_id, right_holder_id, right_category_id, right_usage_type_id, share_percentage)
-                SELECT DISTINCT ON (map.track_id, rh.id, rc.id, rut.id)
-                    map.track_id,
-                    NULL::BIGINT,
-                    rh.id,
-                    rc.id,
-                    rut.id,
-                    COALESCE(NULLIF(REGEXP_REPLACE(TRIM(sc.{share_col}::text), '[^0-9.]', '', 'g'), '')::NUMERIC, 0.0)
-                FROM staging_catalog sc
-                JOIN tmp_track_map map ON map.staging_id = sc.id
-                JOIN right_holder rh ON rh.name = TRIM(sc.{holder_col})
-                JOIN right_category rc ON rc.name = '{cat_name}'
-                JOIN right_usage_type rut ON rut.code = sc.types_of_rights
-                WHERE sc.{holder_col} IS NOT NULL AND TRIM(sc.{holder_col}) != ''
-                AND NOT EXISTS (
-                    SELECT 1 FROM track_right tr
-                    WHERE tr.track_id = map.track_id
-                    AND tr.right_holder_id = rh.id
-                    AND tr.right_category_id = rc.id
-                    AND tr.right_usage_type_id = rut.id
-                )
-                ORDER BY map.track_id, rh.id, rc.id, rut.id;
-                """
-                result = conn.execute(text(sql))
-                count = result.rowcount
-                track_rights_count += count
-                print(f"✅ В {cat_name} ({holder_col}) вставлено: {count}")
-
-            print(f"🏁 ИТОГО вставлено в track_right: {track_rights_count}")
-
-
-
-              # --- 8. ЗАПОЛНЯЕМ TRACK_LABEL (связь трек - лейбл) ---
-            result_track_label = conn.execute(text("""
-                INSERT INTO track_label (track_id, label_id)
-                SELECT DISTINCT map.track_id, l.id
-                FROM staging_catalog sc
-                JOIN tmp_track_map map ON map.staging_id = sc.id
-                JOIN label l ON l.name = sc.label_name
-                WHERE sc.label_name IS NOT NULL AND sc.label_name != ''
-                ON CONFLICT (track_id, label_id) DO NOTHING;
-            """))
-
-            print(f"✅ Связей track_label добавлено: {result_track_label.rowcount}")
-
-
-
+            _cleanup_staging_v2(conn, upload_id, staging_table)
 
             return {
                 "status": "success",
@@ -404,12 +228,10 @@ def sync_catalog_dictionaries():
         return {"status": "error", "message": str(e)}
 
 
+@celery_app.task(name="check_catalog_integrity")
 def check_catalog_integrity():
-    """Проверяет целостность заливки каталога: ищет потери между staging и справочниками."""
     results = {}
-
     with engine.connect() as conn:
-
         # --- 1. LABEL ---
         row = conn.execute(text("""
             SELECT 
@@ -418,7 +240,7 @@ def check_catalog_integrity():
                 (SELECT COUNT(*) FROM label) AS target_count
         """)).fetchone()
         missing_labels = conn.execute(text("""
-            SELECT DISTINCT TRIM(label_name) AS name FROM staging_catalog
+            SELECT DISTINCT TRIM(label_name) FROM staging_catalog
             WHERE label_name IS NOT NULL AND TRIM(label_name) != ''
             EXCEPT
             SELECT name FROM label
@@ -446,8 +268,8 @@ def check_catalog_integrity():
                 SELECT DISTINCT TRIM(unnest(string_to_array(lyricist, ','))) AS name
                 FROM staging_catalog WHERE lyricist IS NOT NULL AND lyricist != ''
             )
-            SELECT 
-                (SELECT COUNT(*) FROM person_names WHERE name IS NOT NULL AND name != '') AS staging_count,
+            SELECT
+                (SELECT COUNT(*) FROM person_names) AS staging_count,
                 (SELECT COUNT(*) FROM person) AS target_count
         """)).fetchone()
         missing_persons = conn.execute(text("""
@@ -581,7 +403,7 @@ def check_catalog_integrity():
         orphan_contributions = conn.execute(text("""
             SELECT sc.id, TRIM(sc.isrc) AS isrc, TRIM(sc.track_name) AS track_name,
                    TRIM(sc.artist_name) AS artist_name, TRIM(sc.composer) AS composer
-            FROM staging_catalog sc
+            From staging_catalog sc
             WHERE (sc.artist_name IS NOT NULL AND sc.artist_name != '')
                OR (sc.composer IS NOT NULL AND sc.composer != '')
                OR (sc.lyricist IS NOT NULL AND sc.lyricist != '')
@@ -768,17 +590,87 @@ def export_normalized_catalog_to_flat(output_path: str = None, label_id: int = N
 
 
 
-def clean_null_bytes(df: pl.DataFrame) -> pl.DataFrame:
+@celery_app.task(name="delete_data_from_all_dictionaries_by_label")
+def delete_data_from_all_dictionaries_by_label(label_id: int):
     """
-    1. Принудительно кастит всё в String
-    2. Вычищает null-байты из всего датафрейма
+    Удаляет все данные о треках, связях и правах, привязанных к указанному лейблу.
+    Базовые справочники (label, person, right_holder, right_category,
+    right_usage_type, finding_source, partners, contract) остаются нетронутыми.
     """
     try:
-        df = df.with_columns([pl.col("*").cast(pl.String)])
-        
-        return df.with_columns([
-            pl.col("*").str.replace_all(r"\x00", "", literal=True)
-        ])
+        with engine.begin() as conn:
+            # 1. Находим все track_id, привязанные к лейблу
+            track_ids_result = conn.execute(text("""
+                SELECT track_id FROM track_label WHERE label_id = :label_id
+            """), {"label_id": label_id})
+            track_ids = [row[0] for row in track_ids_result.fetchall()]
+
+            if not track_ids:
+                return {"status": "success", "message": "Нет треков для данного лейбла", "deleted": {}}
+
+            print(f"🗑️ Найдено треков для удаления: {len(track_ids)}")
+
+            # 2. Удаляем report (нет ON DELETE CASCADE)
+            r_report = conn.execute(text("""
+                DELETE FROM report WHERE track_id = ANY(:ids)
+            """), {"ids": track_ids})
+            print(f"✅ report удалено: {r_report.rowcount}")
+
+            # 3. Удаляем track_right
+            r_track_right = conn.execute(text("""
+                DELETE FROM track_right WHERE track_id = ANY(:ids)
+            """), {"ids": track_ids})
+            print(f"✅ track_right удалено: {r_track_right.rowcount}")
+
+            # 4. Удаляем track_contribution
+            r_track_contribution = conn.execute(text("""
+                DELETE FROM track_contribution WHERE track_id = ANY(:ids)
+            """), {"ids": track_ids})
+            print(f"✅ track_contribution удалено: {r_track_contribution.rowcount}")
+
+            # 5. Удаляем track_release
+            r_track_release = conn.execute(text("""
+                DELETE FROM track_release WHERE track_id = ANY(:ids)
+            """), {"ids": track_ids})
+            print(f"✅ track_release удалено: {r_track_release.rowcount}")
+
+            # 6. Удаляем track_label (все связи этих треков, не только текущий лейбл)
+            r_track_label = conn.execute(text("""
+                DELETE FROM track_label WHERE track_id = ANY(:ids)
+            """), {"ids": track_ids})
+            print(f"✅ track_label удалено: {r_track_label.rowcount}")
+
+            # 7. Удаляем сами треки
+            r_tracks = conn.execute(text("""
+                DELETE FROM track WHERE id = ANY(:ids)
+            """), {"ids": track_ids})
+            print(f"✅ track удалено: {r_tracks.rowcount}")
+
+            # 8. Удаляем осиротевшие релизы (без треков)
+            r_releases = conn.execute(text("""
+                DELETE FROM release r
+                WHERE r.label_id = :label_id
+                AND NOT EXISTS (
+                    SELECT 1 FROM track_release tr WHERE tr.release_id = r.id
+                )
+            """), {"label_id": label_id})
+            print(f"✅ release (осиротевших) удалено: {r_releases.rowcount}")
+
+            stats = {
+                "tracks": r_tracks.rowcount,
+                "reports": r_report.rowcount,
+                "track_rights": r_track_right.rowcount,
+                "track_contributions": r_track_contribution.rowcount,
+                "track_releases": r_track_release.rowcount,
+                "track_labels": r_track_label.rowcount,
+                "releases": r_releases.rowcount,
+            }
+
+            print(f"🏁 Удаление по лейблу {label_id} завершено: {stats}")
+            return {"status": "success", "label_id": label_id, "deleted": stats}
+
     except Exception as e:
-        print(f"⚠️ Ошибка при жесткой очистке: {e}")
-        return df
+        print(f"❌ Ошибка удаления по лейблу: {e}")
+        return {"status": "error", "message": str(e)}
+
+

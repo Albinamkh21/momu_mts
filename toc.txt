@@ -1,0 +1,178 @@
+;
+; Archive created at 2026-03-30 15:21:27 UTC
+;     dbname: momu
+;     TOC Entries: 167
+;     Compression: -1
+;     Dump Version: 1.14-0
+;     Format: CUSTOM
+;     Integer: 4 bytes
+;     Offset: 8 bytes
+;     Dumped from database version: 15.17
+;     Dumped by pg_dump version: 15.17
+;
+;
+; Selected TOC Entries:
+;
+7; 2615 27315 SCHEMA - public momu_user
+3755; 0 0 COMMENT - SCHEMA public momu_user
+2; 3079 27317 EXTENSION - citext 
+3756; 0 0 COMMENT - EXTENSION citext 
+3; 3079 27422 EXTENSION - uuid-ossp 
+3757; 0 0 COMMENT - EXTENSION "uuid-ossp" 
+326; 1255 27671 FUNCTION public clean_and_split(text) momu_user
+237; 1259 27489 TABLE public contract momu_user
+236; 1259 27488 SEQUENCE public contract_id_seq momu_user
+3758; 0 0 SEQUENCE OWNED BY public contract_id_seq momu_user
+252; 1259 37587 TABLE public finding_source momu_user
+251; 1259 37586 SEQUENCE public finding_source_id_seq momu_user
+3759; 0 0 SEQUENCE OWNED BY public finding_source_id_seq momu_user
+227; 1259 27434 TABLE public label momu_user
+226; 1259 27433 SEQUENCE public label_id_seq momu_user
+3760; 0 0 SEQUENCE OWNED BY public label_id_seq momu_user
+247; 1259 27607 TABLE public partners momu_user
+246; 1259 27606 SEQUENCE public partners_id_seq momu_user
+3761; 0 0 SEQUENCE OWNED BY public partners_id_seq momu_user
+235; 1259 27478 TABLE public person momu_user
+234; 1259 27477 SEQUENCE public person_id_seq momu_user
+3762; 0 0 SEQUENCE OWNED BY public person_id_seq momu_user
+239; 1259 27503 TABLE public release momu_user
+238; 1259 27502 SEQUENCE public release_id_seq momu_user
+3763; 0 0 SEQUENCE OWNED BY public release_id_seq momu_user
+254; 1259 37598 TABLE public report momu_user
+253; 1259 37597 SEQUENCE public report_id_seq momu_user
+3764; 0 0 SEQUENCE OWNED BY public report_id_seq momu_user
+229; 1259 27447 TABLE public right_category momu_user
+228; 1259 27446 SEQUENCE public right_category_id_seq momu_user
+3765; 0 0 SEQUENCE OWNED BY public right_category_id_seq momu_user
+233; 1259 27467 TABLE public right_holder momu_user
+232; 1259 27466 SEQUENCE public right_holder_id_seq momu_user
+3766; 0 0 SEQUENCE OWNED BY public right_holder_id_seq momu_user
+231; 1259 27456 TABLE public right_usage_type momu_user
+230; 1259 27455 SEQUENCE public right_usage_type_id_seq momu_user
+3767; 0 0 SEQUENCE OWNED BY public right_usage_type_id_seq momu_user
+259; 1259 39521 TABLE public staging_catalog momu_user
+258; 1259 39520 SEQUENCE public staging_catalog_id_seq momu_user
+3768; 0 0 SEQUENCE OWNED BY public staging_catalog_id_seq momu_user
+248; 1259 27835 TABLE public staging_report momu_user
+256; 1259 38001 TABLE public staging_report_agg momu_user
+255; 1259 38000 SEQUENCE public staging_report_agg_id_seq momu_user
+3769; 0 0 SEQUENCE OWNED BY public staging_report_agg_id_seq momu_user
+241; 1259 27520 TABLE public track momu_user
+243; 1259 27536 TABLE public track_contribution momu_user
+242; 1259 27535 SEQUENCE public track_contribution_id_seq momu_user
+3770; 0 0 SEQUENCE OWNED BY public track_contribution_id_seq momu_user
+240; 1259 27519 SEQUENCE public track_id_seq momu_user
+3771; 0 0 SEQUENCE OWNED BY public track_id_seq momu_user
+250; 1259 37482 TABLE public track_label momu_user
+249; 1259 37481 SEQUENCE public track_label_id_seq momu_user
+3772; 0 0 SEQUENCE OWNED BY public track_label_id_seq momu_user
+257; 1259 38219 TABLE public track_release momu_user
+245; 1259 27553 TABLE public track_right momu_user
+244; 1259 27552 SEQUENCE public track_right_id_seq momu_user
+3773; 0 0 SEQUENCE OWNED BY public track_right_id_seq momu_user
+3463; 2604 27492 DEFAULT public contract id momu_user
+3473; 2604 37590 DEFAULT public finding_source id momu_user
+3456; 2604 27437 DEFAULT public label id momu_user
+3471; 2604 27610 DEFAULT public partners id momu_user
+3462; 2604 27481 DEFAULT public person id momu_user
+3464; 2604 27506 DEFAULT public release id momu_user
+3474; 2604 37601 DEFAULT public report id momu_user
+3459; 2604 27450 DEFAULT public right_category id momu_user
+3461; 2604 27470 DEFAULT public right_holder id momu_user
+3460; 2604 27459 DEFAULT public right_usage_type id momu_user
+3483; 2604 39524 DEFAULT public staging_catalog id momu_user
+3479; 2604 38004 DEFAULT public staging_report_agg id momu_user
+3466; 2604 27523 DEFAULT public track id momu_user
+3469; 2604 27539 DEFAULT public track_contribution id momu_user
+3472; 2604 37485 DEFAULT public track_label id momu_user
+3470; 2604 27556 DEFAULT public track_right id momu_user
+3726; 0 27489 TABLE DATA public contract momu_user
+3741; 0 37587 TABLE DATA public finding_source momu_user
+3716; 0 27434 TABLE DATA public label momu_user
+3736; 0 27607 TABLE DATA public partners momu_user
+3724; 0 27478 TABLE DATA public person momu_user
+3728; 0 27503 TABLE DATA public release momu_user
+3743; 0 37598 TABLE DATA public report momu_user
+3718; 0 27447 TABLE DATA public right_category momu_user
+3722; 0 27467 TABLE DATA public right_holder momu_user
+3720; 0 27456 TABLE DATA public right_usage_type momu_user
+3748; 0 39521 TABLE DATA public staging_catalog momu_user
+3737; 0 27835 TABLE DATA public staging_report momu_user
+3745; 0 38001 TABLE DATA public staging_report_agg momu_user
+3730; 0 27520 TABLE DATA public track momu_user
+3732; 0 27536 TABLE DATA public track_contribution momu_user
+3739; 0 37482 TABLE DATA public track_label momu_user
+3746; 0 38219 TABLE DATA public track_release momu_user
+3734; 0 27553 TABLE DATA public track_right momu_user
+3774; 0 0 SEQUENCE SET public contract_id_seq momu_user
+3775; 0 0 SEQUENCE SET public finding_source_id_seq momu_user
+3776; 0 0 SEQUENCE SET public label_id_seq momu_user
+3777; 0 0 SEQUENCE SET public partners_id_seq momu_user
+3778; 0 0 SEQUENCE SET public person_id_seq momu_user
+3779; 0 0 SEQUENCE SET public release_id_seq momu_user
+3780; 0 0 SEQUENCE SET public report_id_seq momu_user
+3781; 0 0 SEQUENCE SET public right_category_id_seq momu_user
+3782; 0 0 SEQUENCE SET public right_holder_id_seq momu_user
+3783; 0 0 SEQUENCE SET public right_usage_type_id_seq momu_user
+3784; 0 0 SEQUENCE SET public staging_catalog_id_seq momu_user
+3785; 0 0 SEQUENCE SET public staging_report_agg_id_seq momu_user
+3786; 0 0 SEQUENCE SET public track_contribution_id_seq momu_user
+3787; 0 0 SEQUENCE SET public track_id_seq momu_user
+3788; 0 0 SEQUENCE SET public track_label_id_seq momu_user
+3789; 0 0 SEQUENCE SET public track_right_id_seq momu_user
+3512; 2606 27494 CONSTRAINT public contract contract_pkey momu_user
+3514; 2606 27496 CONSTRAINT public contract contract_treaty_number_key momu_user
+3540; 2606 37596 CONSTRAINT public finding_source finding_source_code_key momu_user
+3542; 2606 37594 CONSTRAINT public finding_source finding_source_pkey momu_user
+3490; 2606 27445 CONSTRAINT public label label_name_key momu_user
+3492; 2606 27443 CONSTRAINT public label label_pkey momu_user
+3530; 2606 27616 CONSTRAINT public partners partners_organization_name_service_name_key momu_user
+3532; 2606 27614 CONSTRAINT public partners partners_pkey momu_user
+3508; 2606 27487 CONSTRAINT public person person_full_name_key momu_user
+3510; 2606 27485 CONSTRAINT public person person_pkey momu_user
+3516; 2606 27511 CONSTRAINT public release release_pkey momu_user
+3518; 2606 27513 CONSTRAINT public release release_upc_key momu_user
+3544; 2606 37607 CONSTRAINT public report report_pkey momu_user
+3494; 2606 27454 CONSTRAINT public right_category right_category_name_key momu_user
+3496; 2606 27452 CONSTRAINT public right_category right_category_pkey momu_user
+3503; 2606 27476 CONSTRAINT public right_holder right_holder_name_key momu_user
+3505; 2606 27474 CONSTRAINT public right_holder right_holder_pkey momu_user
+3498; 2606 27465 CONSTRAINT public right_usage_type right_usage_type_code_key momu_user
+3500; 2606 27463 CONSTRAINT public right_usage_type right_usage_type_pkey momu_user
+3552; 2606 39531 CONSTRAINT public staging_catalog staging_catalog_pkey momu_user
+3546; 2606 38011 CONSTRAINT public staging_report_agg staging_report_agg_pkey momu_user
+3524; 2606 27541 CONSTRAINT public track_contribution track_contribution_pkey momu_user
+3526; 2606 37456 CONSTRAINT public track_contribution track_contribution_unique_key momu_user
+3534; 2606 37487 CONSTRAINT public track_label track_label_pkey momu_user
+3536; 2606 37489 CONSTRAINT public track_label track_label_track_id_label_id_key momu_user
+3538; 2606 37501 CONSTRAINT public track_label track_label_unique_idx momu_user
+3522; 2606 27529 CONSTRAINT public track track_pkey momu_user
+3550; 2606 38225 CONSTRAINT public track_release track_release_pkey momu_user
+3528; 2606 27559 CONSTRAINT public track_right track_right_pkey momu_user
+3488; 1259 36502 INDEX public idx_label_name momu_user
+3506; 1259 36503 INDEX public idx_person_name momu_user
+3501; 1259 36504 INDEX public idx_right_holder_name momu_user
+3519; 1259 36064 INDEX public idx_track_contribution_lookup momu_user
+3520; 1259 27580 INDEX public idx_track_isrc momu_user
+3547; 1259 38236 INDEX public idx_track_release_release_id momu_user
+3548; 1259 38237 INDEX public idx_track_release_track_id momu_user
+3553; 2606 27497 FK CONSTRAINT public contract contract_right_holder_id_fkey momu_user
+3563; 2606 27617 FK CONSTRAINT public partners partners_right_usage_type_id_fkey momu_user
+3554; 2606 27514 FK CONSTRAINT public release release_label_id_fkey momu_user
+3566; 2606 37628 FK CONSTRAINT public report report_finding_source_fkey momu_user
+3567; 2606 37613 FK CONSTRAINT public report report_partner_id_fkey momu_user
+3568; 2606 37618 FK CONSTRAINT public report report_right_category_id_fkey momu_user
+3569; 2606 37623 FK CONSTRAINT public report report_right_usage_type_id_fkey momu_user
+3570; 2606 37608 FK CONSTRAINT public report report_track_id_fkey momu_user
+3556; 2606 27547 FK CONSTRAINT public track_contribution track_contribution_person_id_fkey momu_user
+3557; 2606 27542 FK CONSTRAINT public track_contribution track_contribution_track_id_fkey momu_user
+3555; 2606 36275 FK CONSTRAINT public track track_label_id_fkey momu_user
+3564; 2606 37495 FK CONSTRAINT public track_label track_label_label_id_fkey momu_user
+3565; 2606 37490 FK CONSTRAINT public track_label track_label_track_id_fkey momu_user
+3571; 2606 38231 FK CONSTRAINT public track_release track_release_release_id_fkey momu_user
+3572; 2606 38226 FK CONSTRAINT public track_release track_release_track_id_fkey momu_user
+3558; 2606 27565 FK CONSTRAINT public track_right track_right_contract_id_fkey momu_user
+3559; 2606 27575 FK CONSTRAINT public track_right track_right_right_category_id_fkey momu_user
+3560; 2606 27570 FK CONSTRAINT public track_right track_right_right_holder_id_fkey momu_user
+3561; 2606 38214 FK CONSTRAINT public track_right track_right_right_usage_type_id_fkey momu_user
+3562; 2606 27560 FK CONSTRAINT public track_right track_right_track_id_fkey momu_user

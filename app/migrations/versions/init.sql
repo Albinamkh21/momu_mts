@@ -10,7 +10,7 @@ CREATE TABLE staging_catalog (
     import_batch_id UUID DEFAULT gen_random_uuid(),
     loaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     
-
+   
     upc TEXT, isrc TEXT, track_name TEXT, genre_name TEXT, album_name TEXT,
     album_single TEXT, track_number TEXT, artist_name TEXT, track_artist_name TEXT,
     composer TEXT, lyricist TEXT, authors TEXT, explicit TEXT, duration TEXT,
@@ -22,8 +22,30 @@ CREATE TABLE staging_catalog (
     types_of_rights TEXT, countries TEXT, create_date TEXT, release_date TEXT,
     sales_start_date TEXT, has_ringtone TEXT, ringtone_upc TEXT, ringtone_isrc TEXT,
     has_vclip TEXT, vclip_isrc TEXT, video_upc TEXT, has_lyrics TEXT, has_ttml TEXT,
-    effective_date TEXT, termination_date TEXT, active_inactive TEXT, resource_reference TEXT
+    effective_date TEXT, termination_date TEXT, active_inactive TEXT, resource_reference TEXT,
+    track_id TEXT, track_song_id TEXT,
+    upload_id TEXT, user_id TEXT, created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+
+CREATE TABLE staging_catalog_v2 (
+    id BIGSERIAL PRIMARY KEY,
+    import_batch_id UUID DEFAULT gen_random_uuid(),
+    loaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    
+    track_id TEXT, track_song_id TEXT,
+    upc TEXT, isrc TEXT, track_name TEXT, genre_name TEXT, album_name TEXT,
+    album_single TEXT, track_number TEXT, artist_name TEXT, track_artist_name TEXT,
+    composer TEXT, lyricist TEXT, authors TEXT, explicit TEXT, duration TEXT,
+    label_name TEXT, right_id TEXT, author_right_INT TEXT, author_right_MOB TEXT, author_right_PUB TEXT,  ar_label_treaty_number TEXT,
+    related_right_id_INT TEXT, related_right_id_MOB TEXT, related_right_id_PUB TEXT,  rr_label_treaty_number TEXT,
+    types_of_rights TEXT, countries TEXT, create_date TEXT, release_date TEXT,
+    sales_start_date TEXT, has_ringtone TEXT, ringtone_upc TEXT, ringtone_isrc TEXT,
+    has_vclip TEXT, vclip_isrc TEXT, video_upc TEXT, has_lyrics TEXT, has_ttml TEXT,
+    effective_date TEXT, termination_date TEXT, active_inactive TEXT, resource_reference TEXT,
+    upload_id TEXT, user_id TEXT, created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 
 --------------------------------------------------------------------------------
 -- 2. CORE LAYER (Нормализованная рабочая база)
@@ -55,7 +77,9 @@ CREATE TABLE right_usage_type (
 
 CREATE TABLE right_holder (
     id SERIAL PRIMARY KEY,
-   name CITEXT NOT NULL UNIQUE
+   name CITEXT NOT NULL UNIQUE,
+    label_id INTEGER REFERENCES label(id),
+    effective_date DATE, termination_date DATE    
 );
 
 CREATE TABLE person (
@@ -128,6 +152,14 @@ UNIQUE (track_id, label_id);
 
 
 
+CREATE INDEX idx_staging_v2_upload_id ON staging_catalog_v2(upload_id);
+CREATE INDEX idx_staging_v2_isrc ON staging_catalog_v2(isrc);
+CREATE INDEX idx_staging_v2_upc ON staging_catalog_v2(upc);
+CREATE INDEX idx_staging_v2_label_name ON staging_catalog_v2(label_name);
+
+
+CREATE INDEX idx_staging_upload_id ON staging_catalog(upload_id);
+
 CREATE INDEX idx_track_isrc ON track(isrc);
 CREATE INDEX idx_track_title_trgm ON track USING gin (title gin_trgm_ops);
 CREATE INDEX idx_person_name_trgm ON person USING gin (full_name gin_trgm_ops);
@@ -186,22 +218,23 @@ INSERT INTO right_usage_type (code, name) VALUES
 INSERT INTO right_category (name) values ('Author'), ('Related');
 
 
-CREATE TABLE staging_report (
-    row_number TEXT,
-    label_own_code TEXT,
-    isrc TEXT,
-    track_name TEXT,
-    artist_name TEXT,
-    composer TEXT,
-    lyricist TEXT,
-    authors TEXT,
-    author_share_pct TEXT,
-    related_share_pct TEXT,
-    play_count TEXT,
-    payout_amount TEXT,
-    price_per_play TEXT
-  
-);
+    CREATE TABLE staging_report (
+        row_number TEXT,
+        label_own_code TEXT,
+        isrc TEXT,
+        track_name TEXT,
+        artist_name TEXT,
+        composer TEXT,
+        lyricist TEXT,
+        authors TEXT,
+        author_share_pct TEXT,
+        related_share_pct TEXT,
+        play_count TEXT,
+        payout_amount TEXT,
+        price_per_play TEXT,
+        service_name TEXT
+    
+    );
 
 CREATE INDEX idx_stg_report_isrc ON staging_report(isrc);
 CREATE INDEX idx_stg_report_label_own_code ON staging_report(label_own_code);
@@ -234,6 +267,15 @@ CREATE TABLE report (
     play_count INT DEFAULT 0,
     payout_amount NUMERIC(20, 4) DEFAULT 0.0,
     price_per_play NUMERIC(20, 6) DEFAULT 0.0,
+
+
+    -- report data source (для отладки и аудита)
+    r_label_own_code varchar(30),
+    r_isrc varchar(30),
+    r_track_name varchar(255),
+    r_artist_name varchar(255),
+    r_authors varchar(512),
+    r_servise_name varchar(255),
     
 
     finding_source  INT NOT NULL REFERENCES finding_source(id) , 
@@ -315,6 +357,47 @@ END;
 $$ LANGUAGE plpgsql;
 
 
+-- ================================================================================
+-- VIEW: track_full_info - Полная информация о треках с авторами и исполнителями
+-- ================================================================================
+CREATE OR REPLACE VIEW track_full_info AS
+SELECT DISTINCT
+    t.id,
+    t.title,
+    t.isrc,
+    t.label_own_code,
+    
+    -- Исполнители (artist_name/performer)
+    (SELECT string_agg(DISTINCT p.full_name, ', ' ORDER BY p.full_name)
+     FROM track_contribution tc 
+     JOIN person p ON p.id = tc.person_id
+     WHERE tc.track_id = t.id AND tc.role = 'artist_name'
+    ) AS artist_name,
+    
+    -- Композиторы
+    (SELECT string_agg(DISTINCT p.full_name, ', ' ORDER BY p.full_name)
+     FROM track_contribution tc 
+     JOIN person p ON p.id = tc.person_id
+     WHERE tc.track_id = t.id AND tc.role = 'composer'
+    ) AS composer,
+    
+    -- Авторы текста
+    (SELECT string_agg(DISTINCT p.full_name, ', ' ORDER BY p.full_name)
+     FROM track_contribution tc 
+     JOIN person p ON p.id = tc.person_id
+     WHERE tc.track_id = t.id AND tc.role = 'lyricist'
+    ) AS lyricist,
+    
+    -- Авторы
+    (SELECT string_agg(DISTINCT p.full_name, ', ' ORDER BY p.full_name)
+     FROM track_contribution tc 
+     JOIN person p ON p.id = tc.person_id
+     WHERE tc.track_id = t.id AND tc.role = 'authors'
+    ) AS authors
+    
+FROM track t;
+
+
 
 
 
@@ -335,3 +418,52 @@ ON track_right (track_id, right_holder_id, right_category_id);
 /* Временная таблица для хранения промежуточных данных при загрузке из staging_catalog*/
 
 ALTER TABLE track_right  ADD COLUMN right_usage_type_id INTEGER REFERENCES right_usage_type(id);
+ALTER TABLE right_holder ADD COLUMN label_id INTEGER REFERENCES label(id);
+ALTER TABLE right_holder  ADD COLUMN effective_date DATE, ADD COLUMN termination_date DATE;
+
+
+ALTER TABLE person 
+    ADD COLUMN tokens TEXT[],        
+    ADD COLUMN norm_key_full TEXT;    
+
+
+-- Индексы, чтобы поиск на 10 млн летал:
+CREATE INDEX idx_person_full_key ON person(norm_key_full);
+CREATE INDEX idx_person_initial_key ON person(norm_key_initial);
+CREATE INDEX idx_person_tokens_gin ON person USING GIN(tokens); -- Для сложных запросов
+
+
+ALTER TABLE staging_report_agg 
+    ADD COLUMN artist_name_tokens TEXT[],        
+    ADD COLUMN artist_name_norm_key_full TEXT,
+    ADD COLUMN authors_tokens TEXT[],
+    ADD COLUMN authors_norm_key_full TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_track_title_trgm ON track USING gin (title gin_trgm_ops);
+-- Ускорит поиск ролей и связку с треком
+CREATE INDEX IF NOT EXISTS idx_tc_track_role ON track_contribution (track_id, role);
+-- Ускорит сопоставление по нормализованному ключу
+CREATE INDEX IF NOT EXISTS idx_person_norm_key ON person (norm_key_full);
+
+-- Ускорит работу с токенами (обязательно GIN, так как это массив)
+CREATE INDEX IF NOT EXISTS idx_person_tokens_gin ON person USING gin (tokens);
+
+
+
+                CREATE TABLE IF NOT EXISTS staging_report_agg (
+                id BIGSERIAL PRIMARY KEY,
+                label_own_code TEXT,
+                isrc TEXT,
+                track_name TEXT,
+                artist_name TEXT,
+                authors TEXT,
+                service_name TEXT,
+                play_count BIGINT DEFAULT 0,
+                payout_amount NUMERIC(20, 8) DEFAULT 0.0,
+                price_per_play NUMERIC(20, 8) DEFAULT 0.0, 
+                isFound BOOLEAN DEFAULT FALSE, 
+                artist_name_tokens TEXT[],        
+                artist_name_norm_key_full TEXT,
+                authors_tokens TEXT[],
+                authors_norm_key_full TEXT
+            );

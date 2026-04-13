@@ -7,7 +7,7 @@ from celery import chain
 from tasks.report_tasks import (
     process_report_file, update_catalog_dictionaries_from_report,
     insert_data_into_final_report_table, group_report_data, find_lost_track,
-    process_full_report_pipeline
+    process_full_report_pipeline, normalize_person_data, normalize_staging_report_agg
 )
 
 router = APIRouter()
@@ -36,9 +36,8 @@ async def upload_report(file: UploadFile = File(...)):
 
     # Последовательное выполнение задач. Если любая упадет, следующая не запустится
     workflow = chain(
-            process_report_file.s(file_path), 
-            update_catalog_dictionaries_from_report.si()
-            #insert_data_into_final_report_table.si(1, 1, 1, 1, 2026)  # partner_id, right_category_id, right_usage_type_id, month, year
+            process_report_file.s(file_path) 
+          
         )
  
     task_result = workflow.apply_async()
@@ -138,3 +137,39 @@ async def find_lost_track_endpoint():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка при запуске поиска потерянных треков: {str(e)}")
 
+
+@router.post("/normalize_person_data")
+async def normalize_person_data_endpoint():
+    """
+    Нормализация данных в таблице person:
+    заполняет tokens и norm_key_full на основе full_name (транслит → токены → ключ).
+    """
+    try:
+        task_result = normalize_person_data.delay()
+
+        return {
+            "message": "Задача нормализации person запущена",
+            "task_id": task_result.id,
+            "description": "Поля tokens и norm_key_full будут заполнены для всех записей в person"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка при запуске нормализации: {str(e)}")
+
+
+@router.post("/normalize_staging_report_agg")
+async def normalize_staging_report_agg_endpoint():
+    """
+    Нормализация artist_name и authors в staging_report_agg:
+    заполняет artist_name_tokens, artist_name_norm_key_full,
+    authors_tokens, authors_norm_key_full.
+    """
+    try:
+        task_result = normalize_staging_report_agg.delay()
+
+        return {
+            "message": "Задача нормализации staging_report_agg запущена",
+            "task_id": task_result.id,
+            "description": "Нормализованные поля artist_name и authors будут заполнены"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка при запуске нормализации staging: {str(e)}")

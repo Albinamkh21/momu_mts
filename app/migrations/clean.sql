@@ -12,16 +12,19 @@ TRUNCATE TABLE person RESTART IDENTITY CASCADE;
 TRUNCATE TABLE staging_catalog RESTART IDENTITY CASCADE;
 TRUNCATE TABLE staging_report RESTART IDENTITY CASCADE;
 TRUNCATE TABLE report RESTART IDENTITY CASCADE;
+TRUNCATE TABLE staging_catalog_v2 RESTART IDENTITY CASCADE;
+TRUNCATE TABLE staging_report_agg RESTART IDENTITY CASCADE;
 
-
-
+-- Пропущенные справочники/партнеры
+TRUNCATE TABLE partners RESTART IDENTITY CASCADE;
+TRUNCATE TABLE finding_source RESTART IDENTITY CASCADE;
 TRUNCATE TABLE label RESTART IDENTITY CASCADE;
 TRUNCATE TABLE right_usage_type RESTART IDENTITY CASCADE;
 TRUNCATE TABLE right_category RESTART IDENTITY CASCADE;
 
 
 
-
+-- partners, finding_source, label, right_usage_type, right_category
 
 -- 1. Удаляем схему со всем содержимым (таблицы, представления, функции)
 DROP SCHEMA public CASCADE;
