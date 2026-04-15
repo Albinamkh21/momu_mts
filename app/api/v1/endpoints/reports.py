@@ -7,7 +7,7 @@ from celery import chain
 from tasks.report_tasks import (
     process_report_file, update_catalog_dictionaries_from_report,
     insert_data_into_final_report_table, group_report_data, find_lost_track,
-    process_full_report_pipeline, normalize_person_data, normalize_staging_report_agg
+    process_full_report_pipeline, normalize_person_data, normalize_staging_report_agg, normalize_data
 )
 
 router = APIRouter()
@@ -60,6 +60,7 @@ async def get_report_data_endpoint(
     right_usage_type_id: int = Form(...),
     month: int = Form(..., ge=1, le=12),
     year: int = Form(...),
+    group_data: bool = Form(True),
 ):
     """
     Полный пайплайн обработки отчёта:
@@ -83,7 +84,7 @@ async def get_report_data_endpoint(
     try:
         task_result = process_full_report_pipeline.delay(
             file_path, partner_id, right_category_id,
-            right_usage_type_id, month, year
+            right_usage_type_id, month, year, group_data
         )
         return {
             "message": "Полный пайплайн обработки отчёта запущен",
@@ -94,7 +95,8 @@ async def get_report_data_endpoint(
                 "right_category_id": right_category_id,
                 "right_usage_type_id": right_usage_type_id,
                 "month": month,
-                "year": year
+                "year": year,
+                "group_data": group_data
             }
         }
     except Exception as e:
@@ -139,18 +141,42 @@ async def find_lost_track_endpoint():
 
 
 @router.post("/normalize_person_data")
-async def normalize_person_data_endpoint():
+async def normalize_person_data_endpoint(
+    table_name: str = Form("person"),
+    column_name: str = Form("full_name"),
+):
     """
-    Нормализация данных в таблице person:
-    заполняет tokens и norm_key_full на основе full_name (транслит → токены → ключ).
+    Нормализация данных в указанной таблице:
+    заполняет {column_name}_tokens и {column_name}_norm_key на основе {column_name}.
     """
     try:
-        task_result = normalize_person_data.delay()
+        task_result = normalize_person_data.delay(table_name, column_name)
 
         return {
-            "message": "Задача нормализации person запущена",
+            "message": f"Задача нормализации {table_name}.{column_name} запущена",
             "task_id": task_result.id,
-            "description": "Поля tokens и norm_key_full будут заполнены для всех записей в person"
+            "description": f"Поля {column_name}_tokens и {column_name}_norm_key будут заполнены в таблице {table_name}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка при запуске нормализации: {str(e)}")
+
+
+@router.post("/normalize_data")
+async def normalize_data_endpoint(
+    table_name: str = Form("person"),
+    column_name: str = Form("full_name"),
+):
+    """
+    Нормализация данных в указанной таблице:
+    заполняет {column_name}_tokens и {column_name}_norm_key на основе {column_name}.
+    """
+    try:
+        task_result = normalize_data.delay(table_name, column_name)
+
+        return {
+            "message": f"Задача нормализации {table_name}.{column_name} запущена",
+            "task_id": task_result.id,
+            "description": f"Поля {column_name}_tokens и {column_name}_norm_key будут заполнены в таблице {table_name}"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка при запуске нормализации: {str(e)}")

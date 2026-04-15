@@ -10,7 +10,7 @@ CREATE TABLE staging_catalog (
     import_batch_id UUID DEFAULT gen_random_uuid(),
     loaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     
-   
+    
     upc TEXT, isrc TEXT, track_name TEXT, genre_name TEXT, album_name TEXT,
     album_single TEXT, track_number TEXT, artist_name TEXT, track_artist_name TEXT,
     composer TEXT, lyricist TEXT, authors TEXT, explicit TEXT, duration TEXT,
@@ -452,6 +452,7 @@ CREATE INDEX IF NOT EXISTS idx_person_tokens_gin ON person USING gin (tokens);
 
                 CREATE TABLE IF NOT EXISTS staging_report_agg (
                 id BIGSERIAL PRIMARY KEY,
+                row_number int, 
                 label_own_code TEXT,
                 isrc TEXT,
                 track_name TEXT,
