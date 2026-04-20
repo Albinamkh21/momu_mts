@@ -7,7 +7,8 @@ from celery import chain
 from tasks.report_tasks import (
     process_report_file, update_catalog_dictionaries_from_report,
     insert_data_into_final_report_table, group_report_data, find_lost_track,
-    process_full_report_pipeline, normalize_person_data, normalize_staging_report_agg, normalize_data
+    process_full_report_pipeline, normalize_person_data, normalize_staging_report_agg, normalize_data,
+    export_report_to_excel
 )
 
 router = APIRouter()
@@ -199,3 +200,28 @@ async def normalize_staging_report_agg_endpoint():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка при запуске нормализации staging: {str(e)}")
+
+
+@router.post("/export_report_to_excel")
+async def export_report_to_excel_endpoint(
+    partner_id: int = Form(...),
+    right_category_id: int = Form(...),
+    right_usage_type_id: int = Form(...),
+    month: int = Form(..., ge=1, le=12),
+    year: int = Form(...),
+):
+    """
+    Экспорт данных из staging_report_ids / staging_report_agg в Excel.
+    Использует уже заполненные staging-таблицы (для тестирования без полного пайплайна).
+    """
+    try:
+        task_result = export_report_to_excel.delay(
+            partner_id, right_category_id, right_usage_type_id, month, year
+        )
+        return {
+            "message": "Задача экспорта отчёта в Excel запущена",
+            "task_id": task_result.id,
+            "description": "Результат будет экспортирован в файл report_<year>_<month>_<partner>_<category>_<usage_type>.xlsx",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка при запуске экспорта: {str(e)}")

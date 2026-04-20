@@ -1,0 +1,379 @@
+/* ── Tracks Page ── */
+.tracks-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Filters Panel ── */
+.filters-panel {
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  overflow: hidden;
+  transition: margin 0.25s;
+}
+
+.filters-panel--collapsed {
+  margin-bottom: 8px;
+}
+
+.filters-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  cursor: pointer;
+  user-select: none;
+  background: #fafafa;
+  border-bottom: 1px solid #e8e8e8;
+}
+
+.filters-header:hover {
+  background: #f0f0f0;
+}
+
+.filters-header__title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #333;
+}
+
+.filters-header__arrow {
+  font-size: 12px;
+  transition: transform 0.25s;
+  color: #888;
+}
+
+.filters-header__arrow--up {
+  transform: rotate(0deg);
+}
+
+.filters-header__arrow--down {
+  transform: rotate(180deg);
+}
+
+.filters-body {
+  max-height: 200px;
+  opacity: 1;
+  padding: 16px;
+  transition: max-height 0.3s ease, opacity 0.25s ease, padding 0.3s ease;
+}
+
+.filters-body--hidden {
+  max-height: 0;
+  opacity: 0;
+  padding: 0 16px;
+  overflow: hidden;
+}
+
+.filters-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.filter-field__label {
+  font-size: 12px;
+  color: #666;
+  font-weight: 500;
+}
+
+.filter-field__input {
+  padding: 6px 10px;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  font-size: 14px;
+  width: 200px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.filter-field__input:focus {
+  border-color: #1890ff;
+}
+
+.filter-field__input--disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.filter-field__select {
+  padding: 6px 10px;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  font-size: 14px;
+  width: 220px;
+  outline: none;
+  background: #fff;
+  transition: border-color 0.2s;
+}
+
+.filter-field__select:focus {
+  border-color: #1890ff;
+}
+
+.filter-field__select--disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ── Search Button ── */
+.btn-search {
+  padding: 7px 20px;
+  background: #1890ff;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.2s;
+}
+
+.btn-search:hover:not(:disabled) {
+  background: #40a9ff;
+}
+
+.btn-search--loading {
+  background: #aaa;
+  cursor: not-allowed;
+}
+
+/* ── Grid Area ── */
+.grid-wrapper {
+  flex: 1;
+  position: relative;
+}
+
+/* ── Loading Overlay ── */
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  background: rgba(255, 255, 255, 0.7);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #1890ff;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+.loading-spinner--small {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+  border-color: #fff;
+  border-top-color: transparent;
+}
+
+.loading-text {
+  color: #1890ff;
+  font-weight: 600;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Person Sidebar ── */
+.person-sidebar {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 350px;
+  background: #fff;
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.15);
+  padding: 20px;
+  z-index: 20;
+}
+
+/* ── Track title link in grid ── */
+.track-title-link {
+  color: #1890ff;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.track-title-link:hover {
+  text-decoration: underline;
+}
+
+/* ── Detail Page ── */
+.detail-page {
+  height: 100%;
+  overflow-y: auto;
+  padding-bottom: 24px;
+}
+
+.btn-back {
+  padding: 6px 16px;
+  margin-bottom: 16px;
+  background: #fff;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #333;
+  transition: border-color 0.2s, color 0.2s;
+}
+
+.btn-back:hover {
+  color: #1890ff;
+  border-color: #1890ff;
+}
+
+.detail-section {
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 6px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+}
+
+.detail-section__title {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #001529;
+  border-bottom: 1px solid #f0f0f0;
+  padding-bottom: 8px;
+}
+
+.detail-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 32px;
+}
+
+.detail-field {
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+}
+
+.detail-field__label {
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 2px;
+}
+
+.detail-field__value {
+  font-size: 14px;
+  color: #333;
+  font-weight: 500;
+}
+
+.detail-empty {
+  color: #aaa;
+  font-size: 13px;
+  margin: 0;
+}
+
+/* ── Persons ── */
+.detail-persons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.detail-person-group {
+  display: flex;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.detail-person-group__role {
+  font-weight: 600;
+  color: #555;
+  min-width: 120px;
+}
+
+.detail-person-group__role::after {
+  content: ' —';
+}
+
+.detail-person-group__names {
+  color: #333;
+}
+
+/* ── Rights Table ── */
+.rights-block {
+  margin-bottom: 16px;
+}
+
+.rights-block__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #555;
+  margin: 0 0 8px;
+}
+
+.rights-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.rights-table th {
+  text-align: left;
+  padding: 6px 12px;
+  background: #fafafa;
+  border-bottom: 2px solid #e8e8e8;
+  color: #555;
+  font-weight: 600;
+}
+
+.rights-table td {
+  padding: 6px 12px;
+  border-bottom: 1px solid #f0f0f0;
+  color: #333;
+}
+
+.rights-table tr:hover td {
+  background: #f5f7fa;
+}
+
+/* ── Person Edit ── */
+.person-edit-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.person-edit-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.person-edit-input {
+  width: 320px;
+}
+
+.person-saved-badge {
+  color: #52c41a;
+  font-weight: 600;
+  font-size: 13px;
+}

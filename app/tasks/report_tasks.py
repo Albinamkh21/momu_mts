@@ -92,7 +92,7 @@ def process_report_file(file_path: str):
 
         total_rows = len(df)
         chunk_size = 50000
-        
+
         print(f"РЕАЛЬНЫЕ ИМЕНА ИЗ EXCEL: {df.columns}")
 
 
@@ -359,7 +359,7 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
                 s.authors,
                 s.service_name
             FROM staging_report_ids si
-            JOIN staging_report_agg s ON s.id = si.staging_id;
+            INNER JOIN staging_report_agg s ON s.id = si.staging_id;
         """)
 
         with engine.begin() as connection:
@@ -374,9 +374,32 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
         print(f"✅ Данные перенесены в report из staging_report_ids. Записей: {rows_affected}")
 
         # Экспорт данных в Excel
+        export_result = export_report_to_excel(partner_id, right_category_id, right_usage_type_id, month, year)
+        if export_result.get("status") != "success":
+            return {"status": "error", "message": export_result.get("message")}
+
+        return {
+            "status": "success",
+            "report_records_added": rows_affected,
+            "rows_exported": export_result.get("rows_exported"),
+            "output_file": export_result.get("output_file"),
+        }
+
+    except Exception as e:
+        print(f"❌ Ошибка при переносе данных в report: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+
+@celery_app.task(name="export_report_to_excel")
+def export_report_to_excel(partner_id: int, right_category_id: int, right_usage_type_id: int, month: int, year: int):
+    """
+    Экспорт данных из staging_report_ids / staging_report_agg в Excel-файл
+    с информацией о треках и правах.
+    """
+    try:
         print("📤 Начинаем экспорт отчёта в Excel...")
         base_query = text("""
-        SELECT DISTINCT ON (s.id)
+        SELECT DISTINCT ON (s.row_number, s.id)
             s.id AS staging_id,
             s.row_number AS "№ строки",
             s.isrc AS "Отчет ISRC",
@@ -409,10 +432,10 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
             s.price_per_play AS "Цена за прослушивание",
             fs.code AS "Источник совпадения"
         FROM staging_report_agg s
-        JOIN staging_report_ids si ON si.staging_id = s.id
-        JOIN track t ON t.id = si.track_id
+        LEFT JOIN staging_report_ids si ON si.staging_id = s.id
+        LEFT JOIN track t ON t.id = si.track_id
         LEFT JOIN finding_source fs ON fs.id = si.finding_source
-        ORDER BY s.id, si.id ASC;
+        ORDER BY s.row_number ASC, s.id;
         """)
 
         rights_query = text("""
@@ -448,7 +471,6 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
             WHERE t_all.id != si.track_id
         """)
 
-
         with engine.connect() as conn:
             df_base = pl.read_database(query=base_query, connection=conn, infer_schema_length=None)
             df_rights = pl.read_database(query=rights_query, connection=conn, infer_schema_length=None)
@@ -473,24 +495,22 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
         right_category_name = meta_row.right_category_name if meta_row else str(right_category_id)
         right_usage_type_code = meta_row.right_usage_type_code if meta_row else str(right_usage_type_id)
 
-       # --- НАЧАЛО ИСПРАВЛЕННОГО БЛОКА ---
         if len(df_ext) > 0:
             if len(df_rights) > 0:
                 existing_rights = df_rights.select(["staging_id", "category", "right_usage_type_code"]).unique()
-                
                 df_ext_filtered = df_ext.join(
-                    existing_rights, 
-                    on=["staging_id", "category", "right_usage_type_code"], 
+                    existing_rights,
+                    on=["staging_id", "category", "right_usage_type_code"],
                     how="anti"
                 )
             else:
                 df_ext_filtered = df_ext
 
             df_rights_all = pl.concat([
-                df_rights, 
+                df_rights,
                 df_ext_filtered
             ], how="vertical")
-            
+
             df_rights_all = df_rights_all.unique(
                 subset=["staging_id", "category", "right_holder_name", "right_usage_type_code"]
             )
@@ -506,7 +526,7 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
 
             category_map = {"Author": "авторские", "Related": "смежные"}
             groups = df_rights_all.select(["category", "right_usage_type_code"]).unique().sort(["category", "right_usage_type_code"])
-            
+
             for row in groups.iter_rows(named=True):
                 cat = row["category"]
                 rut_code = row["right_usage_type_code"]
@@ -515,21 +535,18 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
                 df_group = df_rights_all.filter(
                     (pl.col("category") == cat) & (pl.col("right_usage_type_code") == rut_code)
                 )
-                
+
                 max_rn = df_group.select(pl.col("rn").max()).item() if len(df_group) > 0 else 0
 
                 for i in range(1, (max_rn or 0) + 1):
                     suffix = f" {i}" if max_rn > 1 else ""
-                    
+
                     group_i = df_group.filter(pl.col("rn") == i).select([
                         pl.col("staging_id"),
                         pl.col("share_percentage").alias(f"Доля {cat_label} прав {rut_code}{suffix}, %"),
                         pl.col("right_holder_name").alias(f"Правообладатель ({cat_label}) {rut_code}{suffix}"),
                     ])
                     df_base = df_base.join(group_i, on="staging_id", how="left")
-        # --- КОНЕЦ ИСПРАВЛЕННОГО БЛОКА ---
-
-
 
         df = df_base.drop("staging_id")
 
@@ -550,13 +567,12 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
 
         return {
             "status": "success",
-            "report_records_added": rows_affected,
             "rows_exported": len(df),
-            "output_file": output_path
+            "output_file": output_path,
         }
 
     except Exception as e:
-        print(f"❌ Ошибка при переносе данных в report: {str(e)}")
+        print(f"❌ Ошибка при экспорте отчёта в Excel: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 
@@ -942,9 +958,10 @@ def normalize_data(table_name: str = "person", column_name: str = "full_name"):
 
         select_sql = text(
             f"SELECT id, {column_name} FROM {table_name} "
-            f"WHERE {column_name} IS NOT NULL AND id > :last_id "
+            f"WHERE {column_name} IS NOT NULL and {norm_key_col} is NULL AND id > :last_id "
             f"ORDER BY id LIMIT :chunk_size;"
         )
+        print(f"📦 выбираем {select_sql} ")
 
         while True:
             with engine.connect() as conn:

@@ -56,6 +56,11 @@ services:
       - "${APP_PORT}:${APP_PORT}"
     env_file:
       - .env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${APP_PORT}/docs')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5  
     depends_on:
       momu_postgres:
         condition: service_healthy
@@ -85,6 +90,23 @@ services:
         condition: service_started
     networks:
       - momu-network
+  momu_ui:
+    image: node:lts-alpine
+    container_name: momu_ui
+    working_dir: /app/ui
+    volumes:
+      - ./app:/app
+      - /app/ui/node_modules
+    # Запускаем в режиме разработки Vite
+    command: sh -c " npm install && npm run dev -- --host"
+    ports:
+      - "5173:5173"
+    networks:
+      - momu-network
+    depends_on:
+      app:
+        condition: service_healthy
+        
 
 volumes:
   momu-db-data:
@@ -92,3 +114,5 @@ volumes:
 networks:
   momu-network:
     driver: bridge
+
+

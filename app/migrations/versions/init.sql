@@ -456,6 +456,7 @@ CREATE INDEX IF NOT EXISTS idx_person_tokens_gin ON person USING gin (tokens);
                 label_own_code TEXT,
                 isrc TEXT,
                 track_name TEXT,
+                track_name_norm_key TEXT,
                 artist_name TEXT,
                 authors TEXT,
                 service_name TEXT,
