@@ -4,6 +4,7 @@ from sqlalchemy import create_engine, text
 from core.celery_app import celery_app
 from core.constants import RightCategory, FindingSource
 from .utils import clean_null_bytes
+from services.broadcaster import TaskProgress
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
@@ -14,8 +15,8 @@ def _match_by_name(match_type, partner_id, right_category_id, right_usage_type_i
     """
     Поиск и вставка в report по track_name + person.
     match_type определяет тип сравнения:
-      AUTHOR — сравнение по authors (роли authors/composer/lyricist).
-      RELATED — сравнение по artist_name (роль artist_name).
+    AUTHOR — сравнение по authors (роли authors/composer/lyricist).
+    RELATED — сравнение по artist_name (роль artist_name).
     right_category_id — значение, записываемое в таблицу report.
     Возвращает (inserted, deleted).
     """
@@ -36,21 +37,21 @@ def _match_by_name(match_type, partner_id, right_category_id, right_usage_type_i
         FROM staging_report_agg s
         JOIN track t ON t.title = s.track_name
         WHERE s.{staging_col} IS NOT NULL AND s.{staging_col} != ''
-          AND s.isfound = FALSE
-          AND EXISTS (
-              SELECT 1
-              FROM track_contribution tc
-              JOIN person p ON p.id = tc.person_id
-              WHERE tc.track_id = t.id
+        AND s.isfound = FALSE
+        AND EXISTS (
+            SELECT 1
+            FROM track_contribution tc
+            JOIN person p ON p.id = tc.person_id
+            WHERE tc.track_id = t.id
                 AND tc.role IN {roles}
                 AND p.full_name = ANY(clean_and_split(s.{staging_col}))
-          );
+        );
     """)
 
     mark_found_sql = text("""
         UPDATE staging_report_agg s SET isfound = TRUE
         WHERE s.isfound = FALSE
-          AND EXISTS (SELECT 1 FROM staging_report_ids si WHERE si.staging_id = s.id);
+        AND EXISTS (SELECT 1 FROM staging_report_ids si WHERE si.staging_id = s.id);
     """)
 
     params = {
@@ -206,10 +207,10 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
         delete_sql = text("""
             DELETE FROM report
             WHERE partner_id = :partner_id
-              AND right_category_id = :right_category_id
-              AND right_usage_type_id = :right_usage_type_id
-              AND report_month = :month
-              AND report_year = :year
+            AND right_category_id = :right_category_id
+            AND right_usage_type_id = :right_usage_type_id
+            AND report_month = :month
+            AND report_year = :year
         """)
         with engine.begin() as connection:
             delete_result = connection.execute(delete_sql, {
@@ -258,7 +259,7 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
         mark_found_sql = text("""
             UPDATE staging_report_agg s SET isfound = TRUE
             WHERE s.isfound = FALSE
-              AND EXISTS (SELECT 1 FROM staging_report_ids si WHERE si.staging_id = s.id);
+            AND EXISTS (SELECT 1 FROM staging_report_ids si WHERE si.staging_id = s.id);
         """)
 
         with engine.begin() as connection:
@@ -300,33 +301,44 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
         normalize_staging_report_agg()
 
         # === Шаг 7: Поиск по track_name + authors (author/composer/lyricist) ===
-        inserted, deleted = _match_by_normalized_name(RightCategory.AUTHOR, partner_id, right_category_id, right_usage_type_id, month, year, "=")
+        inserted, deleted = _match_by_normalized_name(RightCategory.AUTHOR, partner_id, right_category_id, right_usage_type_id, month, year, "=", "=")
         total_rows_affected += inserted
 
         # === Шаг 8: Поиск по track_name + artist_name ===
-        inserted, deleted = _match_by_normalized_name(RightCategory.RELATED, partner_id, right_category_id, right_usage_type_id, month, year, "=")
+        inserted, deleted = _match_by_normalized_name(RightCategory.RELATED, partner_id, right_category_id, right_usage_type_id, month, year, "=", "=")
         total_rows_affected += inserted
 
-
-        inserted, deleted = _match_by_normalized_name(RightCategory.AUTHOR, partner_id, right_category_id, right_usage_type_id, month, year, "partly")
-        total_rows_affected += inserted
-
-        # === Шаг 8: Поиск по track_name + artist_name ===
-        inserted, deleted = _match_by_normalized_name(RightCategory.RELATED, partner_id, right_category_id, right_usage_type_id, month, year, "partly")
-        total_rows_affected += inserted
-
-           # === Шаг 7: Поиск по track_name + authors (author/composer/lyricist) ===
-        inserted, deleted = _match_by_normalized_name(RightCategory.AUTHOR, partner_id, right_category_id, right_usage_type_id, month, year, "like")
+        # === Шаг 7: Поиск по track_name + authors (author/composer/lyricist) ===
+        inserted, deleted = _match_by_normalized_name(RightCategory.AUTHOR, partner_id, right_category_id, right_usage_type_id, month, year, "=", "like")
         total_rows_affected += inserted
 
         # === Шаг 8: Поиск по track_name + artist_name ===
-        inserted, deleted = _match_by_normalized_name(RightCategory.RELATED, partner_id, right_category_id, right_usage_type_id, month, year, "like")
+        inserted, deleted = _match_by_normalized_name(RightCategory.RELATED, partner_id, right_category_id, right_usage_type_id, month, year, "=", "like")
+        total_rows_affected += inserted
+
+            # === Шаг 7: Поиск по track_name + authors (author/composer/lyricist) ===
+        inserted, deleted = _match_by_normalized_name(RightCategory.AUTHOR, partner_id, right_category_id, right_usage_type_id, month, year, "like", "=")
+        total_rows_affected += inserted
+
+        # === Шаг 8: Поиск по track_name + artist_name ===
+        inserted, deleted = _match_by_normalized_name(RightCategory.RELATED, partner_id, right_category_id, right_usage_type_id, month, year, "like", "=")
         total_rows_affected += inserted
 
 
-     
 
- 
+        inserted, deleted = _match_by_normalized_name(RightCategory.AUTHOR, partner_id, right_category_id, right_usage_type_id, month, year, "partly", "=")
+        total_rows_affected += inserted
+
+        # === Шаг 8: Поиск по track_name + artist_name ===
+        inserted, deleted = _match_by_normalized_name(RightCategory.RELATED, partner_id, right_category_id, right_usage_type_id, month, year, "partly", "=")
+        total_rows_affected += inserted
+
+    
+
+
+    
+
+
 
 
 
@@ -412,20 +424,20 @@ def export_report_to_excel(partner_id: int, right_category_id: int, right_usage_
             t.isrc AS "Код ISRC",
             t.title AS "Название трека",
             (SELECT string_agg(DISTINCT p.full_name, ', ')
-             FROM track_contribution tc JOIN person p ON p.id = tc.person_id
-             WHERE tc.track_id = t.id AND tc.role = 'artist_name'
+            FROM track_contribution tc JOIN person p ON p.id = tc.person_id
+            WHERE tc.track_id = t.id AND tc.role = 'artist_name'
             ) AS "Исполнитель",
             (SELECT string_agg(DISTINCT p.full_name, ', ')
-             FROM track_contribution tc JOIN person p ON p.id = tc.person_id
-             WHERE tc.track_id = t.id AND tc.role = 'composer'
+            FROM track_contribution tc JOIN person p ON p.id = tc.person_id
+            WHERE tc.track_id = t.id AND tc.role = 'composer'
             ) AS "Автор музыки",
             (SELECT string_agg(DISTINCT p.full_name, ', ')
-             FROM track_contribution tc JOIN person p ON p.id = tc.person_id
-             WHERE tc.track_id = t.id AND tc.role = 'lyricist'
+            FROM track_contribution tc JOIN person p ON p.id = tc.person_id
+            WHERE tc.track_id = t.id AND tc.role = 'lyricist'
             ) AS "Автор текста",
             (SELECT string_agg(DISTINCT p.full_name, ', ')
-             FROM track_contribution tc JOIN person p ON p.id = tc.person_id
-             WHERE tc.track_id = t.id AND tc.role = 'authors'
+            FROM track_contribution tc JOIN person p ON p.id = tc.person_id
+            WHERE tc.track_id = t.id AND tc.role = 'authors'
             ) AS "Авторы",
             s.play_count AS "Кол-во прослушиваний",
             s.payout_amount AS "Сумма выплат",
@@ -606,7 +618,7 @@ def process_full_report_pipeline(file_path: str, partner_id: int, right_category
     print(f"✅ Шаг 1 завершён: process_report_file — загружено строк: {result.get('total_rows')}")
     steps_completed.append("process_report_file")
 
- 
+
 
     # === Шаг 3: Группировка данных ===
     print(f"📊 Шаг 3: Группировка данных (group_report_data, group_data={group_data})...")
@@ -681,7 +693,7 @@ def group_report_data(group_data: bool = True):
                 payout_amount NUMERIC(20, 8) DEFAULT 0.0,
                 price_per_play NUMERIC(20, 8) DEFAULT 0.0, 
                 isFound BOOLEAN DEFAULT FALSE
-              
+            
             );
             """)
             connection.execute(create_table_sql)
@@ -816,7 +828,7 @@ def find_lost_track():
         """
 
         query = """ select  track_name, artist_name, authors, isrc, label_own_code, payout_amount  from staging_report_agg  where isFound = false order by payout_amount desc;
-          """
+        """
 
         with engine.connect() as conn:
             df = pl.read_database(
@@ -833,6 +845,7 @@ def find_lost_track():
         df.write_excel(output_path)
 
         print(f"✅ Данные экспортированы в файл: {output_path}")
+        TaskProgress.emit(1, f"✅ Данные экспортированы в файл: {output_path}")
 
         return {
             "status": "success",
@@ -842,6 +855,7 @@ def find_lost_track():
 
     except Exception as e:
         print(f"❌ Ошибка при поиске потерянных треков: {str(e)}")
+        TaskProgress.emit(1, f"❌ Ошибка при поиске потерянных треков: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 
@@ -885,7 +899,7 @@ def _normalize_name(full_name: str):
     cleaned = _re.sub(r"[^a-z0-9\s]", " ", transliterated)
     tokens = cleaned.split()
     tokens = [t for t in tokens if t]  # убираем пустые
-   
+
 
 
     if not tokens:
@@ -894,10 +908,10 @@ def _normalize_name(full_name: str):
     anchor_tokens = [t for t in tokens if len(t) > 1]    
     initials = sorted([t for t in tokens if len(t) == 1])
     
-   
+
     norm_key_full = "|".join(sorted(anchor_tokens)) + "||" + "|".join(initials)
     
-  
+
     return anchor_tokens, norm_key_full
 
 
@@ -929,7 +943,7 @@ def _normalize_title(full_name: str):
 
 
 @celery_app.task(name="normalize_data")
-def normalize_data(table_name: str = "person", column_name: str = "full_name"):
+def normalize_data(table_name: str = "person", column_name: str = "full_name", connection=None):
     """
     Заполняет поля {column_name}_tokens и {column_name}_norm_key в таблице {table_name}
     на основе {column_name} (транслит → токены → отсортированный ключ).
@@ -964,8 +978,19 @@ def normalize_data(table_name: str = "person", column_name: str = "full_name"):
         print(f"📦 выбираем {select_sql} ")
 
         while True:
-            with engine.connect() as conn:
+            # use provided connection if exists, otherwise open a new one
+            if connection:
+                conn = connection
+                own_conn = False
+            else:
+                conn = engine.connect()
+                own_conn = True
+
+            try:
                 rows = conn.execute(select_sql, {"last_id": last_id, "chunk_size": chunk_size}).fetchall()
+            finally:
+                if own_conn:
+                    conn.close()
 
             if not rows:
                 break
@@ -981,8 +1006,12 @@ def normalize_data(table_name: str = "person", column_name: str = "full_name"):
                     "norm_key_full": norm_key_full,
                 })
 
-            with engine.begin() as conn:
-                conn.execute(update_sql, updates)
+            if connection:
+                # caller manages transaction/commit
+                connection.execute(update_sql, updates)
+            else:
+                with engine.begin() as conn2:
+                    conn2.execute(update_sql, updates)
 
             last_id = rows[-1].id
             total_updated += len(updates)
@@ -1006,8 +1035,8 @@ def _split_names(raw: str) -> list[str]:
 def normalize_staging_report_agg():
     """
     Заполняет нормализованные поля в staging_report_agg:
-      artist_name_tokens, artist_name_norm_key_full,
-      authors_tokens, authors_norm_key_full.
+    artist_name_tokens, artist_name_norm_key_full,
+    authors_tokens, authors_norm_key_full.
     Для каждого поля: split на отдельные имена → _normalize_name → массив norm_key.
     """
     try:
@@ -1083,7 +1112,7 @@ def normalize_staging_report_agg():
         return {"status": "error", "message": str(e)}
 
 
-def _match_by_normalized_name(match_type, partner_id, right_category_id, right_usage_type_id, month, year, match_type_name="="):
+def _match_by_normalized_name(match_type, partner_id, right_category_id, right_usage_type_id, month, year, match_type_track_name="=", match_type_person="="):
     """
     Поиск и вставка в report по track_name + нормализованным данным person.
     Аналог _match_by_name, но сравнение через norm_key_full.
@@ -1092,52 +1121,52 @@ def _match_by_normalized_name(match_type, partner_id, right_category_id, right_u
         staging_norm_key_col = "authors_norm_key_full"
         roles = "('authors', 'composer', 'lyricist')"
         finding_source = FindingSource.NAME_AUTHOR_NORM
-        label = f"NAME+AUTHOR_NORMIZED + NAME:{match_type_name}"
+        label = f"NAME+AUTHOR_NORMIZED + NAME:"
         tokens_col = "authors_tokens"
     else:
         staging_norm_key_col = "artist_name_norm_key_full"
         roles = "('artist_name')"
         finding_source = FindingSource.NAME_ARTIST_NORM
-        label = f"NAME+ARTIST_NORMIZED + NAME{match_type_name}"
+        label = f"NAME+ARTIST_NORMIZED + NAME"
         tokens_col = "artist_name_tokens"
 
-    if match_type_name == "=":    
+    if match_type_track_name == "=":    
         comparison_title = " t.title_norm_key = s.track_name_norm_key"
-    elif match_type_name == "like":
-        comparison_title = " t.title_norm_key ~ s.track_name_norm_key "
+    
+    elif match_type_track_name == "like":
+        comparison_title = " t.title_norm_key % s.track_name_norm_key "
         finding_source = (FindingSource.NAME_AUTHOR_NORM_PARTLY 
-                          if match_type == RightCategory.AUTHOR 
-                          else FindingSource.NAME_ARTIST_NORM_PARTLY)
+                        if match_type == RightCategory.AUTHOR 
+                        else FindingSource.NAME_ARTIST_NORM_PARTLY)
     else:   
-       comparison_title = " lower(trim(split_part(t.title, ' (', 1))) = lower(trim(split_part(s.track_name, ' (', 1)))"
-       finding_source = (FindingSource.NAME_AUTHOR_NORM_PARTLY 
-                          if match_type == RightCategory.AUTHOR 
-                          else FindingSource.NAME_ARTIST_NORM_PARTLY)
+        comparison_title = " lower(trim(split_part(t.title, ' (', 1))) = lower(trim(split_part(s.track_name, ' (', 1)))"
+        finding_source = (FindingSource.NAME_AUTHOR_NORM_PARTLY 
+                            if match_type == RightCategory.AUTHOR 
+                            else FindingSource.NAME_ARTIST_NORM_PARTLY)
 
-       
+    if match_type_person == "=":
+        comparison_person =  f"  p.norm_key_full = s.{staging_norm_key_col}"
+    else :    
+        comparison_person = f"   p.tokens && s.{tokens_col}"
+
+    label += f"TRACK:{match_type_track_name} + PERSON:{match_type_person}"
 
     insert_sql = text(f"""
+    
         WITH matched AS (
             INSERT INTO staging_report_ids (staging_id, track_id, finding_source)
-            SELECT s.id, t.id, :finding_source
+            SELECT DISTINCT s.id, t.id, :finding_source
             FROM staging_report_agg s
-            JOIN track t ON {comparison_title}
+            -- Сначала цепляем персону (очень быстрый поиск по btree или gin индексу)
+            JOIN person p ON {comparison_person}
+            -- Достаем связки этой персоны с треками (мгновенно по индексу)
+            JOIN track_contribution tc ON tc.person_id = p.id AND tc.role IN {roles}
+            -- Достаем сами треки
+            JOIN track t ON t.id = tc.track_id
             WHERE s.{staging_norm_key_col} IS NOT NULL
-              AND s.isfound = FALSE
-              AND EXISTS (
-                  SELECT 1
-                  FROM track_contribution tc
-                  JOIN person p ON p.id = tc.person_id
-                  WHERE tc.track_id = t.id
-                    AND tc.role IN {roles}
-                    AND ( p.norm_key_full = s.{staging_norm_key_col}
-                        OR 
-                       (
-                                p.tokens IS NOT NULL AND s.{tokens_col} IS NOT NULL  AND 
-                                p.tokens && s.{tokens_col}
-                        )
-                       ) 
-              )
+            AND s.isfound = FALSE
+            -- И только в конце фильтруем эти несколько треков по названию (даже для like и partly это будет моментально)
+            AND {comparison_title}
             RETURNING staging_id
         )
         UPDATE staging_report_agg SET isfound = TRUE
@@ -1148,7 +1177,7 @@ def _match_by_normalized_name(match_type, partner_id, right_category_id, right_u
         "finding_source": finding_source,
     }
 
- 
+
 
     with engine.begin() as connection:
         result = connection.execute(insert_sql, params)
@@ -1160,49 +1189,83 @@ def _match_by_normalized_name(match_type, partner_id, right_category_id, right_u
     return inserted, inserted
 
 @celery_app.task(name="normalize_person_data")
-def normalize_person_data():
+def normalize_person_data(table_name="person", column_name="full_name",
+                        tokens_col="tokens", norm_key_col="norm_key_full", connection=None):
     """
-    Заполняет поля tokens и norm_key_full в таблице person
-    на основе full_name (транслит → токены → отсортированный ключ).
+    Заполняет поля tokens и norm_key в указанной таблице
+    на основе column_name (транслит → токены → отсортированный ключ).
     """
     try:
-        with engine.connect() as conn:
-            rows = conn.execute(text(
-                "SELECT id, full_name FROM person  where full_name is not null; "
-            )).fetchall()
+        import re as _re_val
+        if not _re_val.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table_name):
+            return {"status": "error", "message": f"Invalid table_name: {table_name}"}
+        if not _re_val.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', column_name):
+            return {"status": "error", "message": f"Invalid column_name: {column_name}"}
+        if not _re_val.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', tokens_col):
+            return {"status": "error", "message": f"Invalid tokens_col: {tokens_col}"}
+        if not _re_val.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', norm_key_col):
+            return {"status": "error", "message": f"Invalid norm_key_col: {norm_key_col}"}
 
-        print(f"📋 Найдено персон для нормализации: {len(rows)}")
-
-        updates = []
-        for row in rows:
-            person_id, full_name = row.id, row.full_name
-            tokens, norm_key_full = _normalize_name(full_name)
-            updates.append({
-                "pid": person_id,
-                "tokens": tokens,
-                "norm_key_full": norm_key_full,
-            })
-
-        batch_size = 5000
+        chunk_size = 5000
         total_updated = 0
+        last_id = 0
 
-        update_sql = text("""
-            UPDATE person
-            SET tokens = :tokens,
-                norm_key_full = :norm_key_full
+        select_sql = text(
+            f"SELECT id, {column_name} FROM {table_name} "
+            f"WHERE {column_name} IS NOT NULL AND {norm_key_col} IS NULL AND id > :last_id "
+            f"ORDER BY id LIMIT :chunk_size"
+        )
+
+        update_sql = text(f"""
+            UPDATE {table_name}
+            SET {tokens_col} = :tokens,
+                {norm_key_col} = :norm_key_full
             WHERE id = :pid
         """)
 
-        for i in range(0, len(updates), batch_size):
-            batch = updates[i : i + batch_size]
-            with engine.begin() as conn:
-                conn.execute(update_sql, batch)
-            total_updated += len(batch)
-            print(f"📦 Обновлено {total_updated} / {len(updates)}")
+        while True:
+            # use provided connection if exists, otherwise open a new one
+            if connection:
+                conn = connection
+                own_conn = False
+            else:
+                conn = engine.connect()
+                own_conn = True
 
-        print(f"✅ Нормализация завершена. Обновлено записей: {total_updated}")
+            try:
+                rows = conn.execute(select_sql, {"last_id": last_id, "chunk_size": chunk_size}).fetchall()
+            finally:
+                if own_conn:
+                    conn.close()
+
+            if not rows:
+                break
+
+            updates = []
+            for row in rows:
+                row_id = row.id
+                value = getattr(row, column_name)
+                tokens, norm_key_full = _normalize_name(value)
+                updates.append({
+                    "pid": row_id,
+                    "tokens": tokens,
+                    "norm_key_full": norm_key_full,
+                })
+
+            # perform update inside a transaction if caller did not provide connection
+            if connection:
+                connection.execute(update_sql, updates)
+            else:
+                with engine.begin() as conn2:
+                    conn2.execute(update_sql, updates)
+
+            last_id = rows[-1].id
+            total_updated += len(updates)
+            print(f"📦 Обновлено {total_updated} (last_id={last_id})")
+
+        print(f"✅ Нормализация {table_name}.{column_name} завершена. Обновлено записей: {total_updated}")
         return {"status": "success", "total_updated": total_updated}
 
     except Exception as e:
-        print(f"❌ Ошибка при нормализации person: {str(e)}")
+        print(f"❌ Ошибка при нормализации {table_name}.{column_name}: {str(e)}")
         return {"status": "error", "message": str(e)}    

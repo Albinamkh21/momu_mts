@@ -3,7 +3,7 @@ import shutil
 import os
 from uuid import uuid4
 from celery import chain
-from tasks.catalog_tasks_v2 import process_catalog_file_v2, sync_catalog_dictionaries_v2
+from tasks.catalog_tasks_v2 import process_catalog_file_v2, sync_catalog_dictionaries
 
 router = APIRouter()
 
@@ -23,7 +23,7 @@ async def upload_catalog_v2(file: UploadFile = File(...), user_id: str = Form(..
 
     workflow = chain(
         process_catalog_file_v2.s(file_path, user_id, file.filename),
-        sync_catalog_dictionaries_v2.s(),
+        sync_catalog_dictionaries.s("v2"),
     )
 
     task_result = workflow.apply_async()

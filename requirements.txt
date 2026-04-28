@@ -14,4 +14,4 @@ adbc-driver-postgresql
 xlsxwriter
 
 watchfiles
-
+aioredis

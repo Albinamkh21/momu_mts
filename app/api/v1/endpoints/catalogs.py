@@ -3,12 +3,15 @@ import shutil
 import os
 from uuid import uuid4
 from celery import chain
-from tasks.catalog_tasks import process_catalog_file, sync_catalog_dictionaries, check_catalog_integrity, export_normalized_catalog_to_flat, delete_data_from_all_dictionaries_by_label
+from tasks.catalog_tasks import process_catalog_file,  check_catalog_integrity, export_normalized_catalog_to_flat, delete_data_from_all_dictionaries_by_label
+from tasks.catalog_tasks_v2 import  sync_catalog_dictionaries 
 from tasks.report_tasks import update_catalog_dictionaries_from_report
-
+from pydantic import BaseModel
 router = APIRouter()
 
 STORAGE_DIR = "/app/storage"
+class DownloadRequest(BaseModel):
+    label_id: int | None = None
 
 @router.post("/upload")
 async def upload_catalog(file: UploadFile = File(...)):
@@ -28,7 +31,7 @@ async def upload_catalog(file: UploadFile = File(...)):
     userId = "albina"
     workflow = chain(
         process_catalog_file.s(file_path, userId, file.filename),
-        sync_catalog_dictionaries.s(),
+        sync_catalog_dictionaries.s("v1"),
       
     )
  
@@ -71,20 +74,21 @@ async def check_upload_catalog():
 
 
 @router.post("/download")
-async def download_catalog(file: UploadFile = File(...), label_id: int = Form(None)):
-   
-    task_result = export_normalized_catalog_to_flat.delay("/app/storage/catalog_normalized.xlsx", label_id)
+async def download_catalog(request: DownloadRequest):
+    # Передаём директорию назначения; имя файла генерируется автоматически в задаче
+    task_result = export_normalized_catalog_to_flat.delay("/app/storage", request.label_id)
 
     return {
         "message": "Запущен процесс экспорта каталога",
         "task_id": task_result.id,
-        "label_id": label_id
+        "label_id": request.label_id
     }
 
 
 @router.delete("/label/{label_id}")
 async def delete_label_data(label_id: int):
     """Удаляет все данные о треках и связях для указанного лейбла."""
+    print(f"Запуск удаления данных для label_id: {label_id}")
     task_result = delete_data_from_all_dictionaries_by_label.delay(label_id)
 
     return {

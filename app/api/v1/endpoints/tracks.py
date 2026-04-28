@@ -36,10 +36,14 @@ def get_tracks(
     label_own_code: Optional[str] = Query(None),
     label_id: Optional[int] = Query(None),
     query: Optional[str] = Query(None, description="Общий поиск"),
+   
+    artist_name: Optional[str] = Query(None, description="Поиск по исполнителю"),
+    author_name: Optional[str] = Query(None, description="Поиск по авторам "),
+
     limit: int = Query(100, le=500),
     db: Session = Depends(get_db),
 ):
-    # Строим запрос с фильтрами
+   
     conditions = []
     params = {"lim": limit}
 
@@ -50,14 +54,45 @@ def get_tracks(
         conditions.append("t.title ILIKE :title")
         params["title"] = f"%{title}%"
     if isrc:
-        conditions.append("t.isrc ILIKE :isrc")
-        params["isrc"] = f"%{isrc}%"
+        conditions.append("t.isrc = :isrc")
+        params["isrc"] = isrc
     if label_own_code:
-        conditions.append("t.label_own_code ILIKE :loc")
-        params["loc"] = f"%{label_own_code}%"
+        conditions.append("t.label_own_code = :loc")
+        params["loc"] = f"{label_own_code}"
     if label_id:
-        conditions.append("t.label_id = :label_id")
+        conditions.append("""
+            EXISTS (
+                SELECT 1 FROM track_label tl 
+                WHERE tl.track_id = t.id AND tl.label_id = :label_id
+            )
+        """)
         params["label_id"] = label_id
+
+    # Для artist_name:
+    if artist_name:
+        conditions.append("""
+            EXISTS (
+                SELECT 1 FROM track_contribution tc
+                JOIN person p ON p.id = tc.person_id
+                WHERE tc.track_id = t.id 
+                AND tc.role IN ('artist', 'artist_name', 'track_artist_name') -- Расширяем список
+                AND p.full_name ILIKE :artist_name
+            )
+        """)
+        params["artist_name"] = f"%{artist_name}%"
+
+    # Для author_name:
+    if author_name:
+        conditions.append("""
+            EXISTS (
+                SELECT 1 FROM track_contribution tc
+                JOIN person p ON p.id = tc.person_id
+                WHERE tc.track_id = t.id 
+                AND tc.role IN ('composer', 'lyricist', 'author', 'authors') -- Добавляем 'authors'
+                AND p.full_name ILIKE :author_name
+            )
+        """)
+        params["author_name"] = f"%{author_name}%"    
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     tracks_rows = db.execute(

@@ -1,25 +1,52 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTracks } from './hooks/useTracks';
 import { TrackGrid } from './components/TrackGrid';
 import { FiltersPanel } from './components/FiltersPanel';
 import './tracks.css';
 
-const emptyFilters = { title: '', isrc: '', label_own_code: '', label_id: '' };
+const STORAGE_KEY = 'tracks_filters';
+
+const getInitialFilters = () => {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved) {
+    try {
+      return JSON.parse(saved);
+    } catch {
+      return { title: '', isrc: '', label_own_code: '', label_id: '', artist_name: '', author_name: '' };
+    }
+  }
+  return { title: '', isrc: '', label_own_code: '', label_id: '', artist_name: '', author_name: '' };
+};
 
 export const TracksPage = ({ onTrackClick }) => {
   const { data, loading, labels, refetch } = useTracks();
   const [selectedPerson, setSelectedPerson] = useState(null);
-  const [filters, setFilters] = useState(emptyFilters);
+  const [filters, setFilters] = useState(getInitialFilters);
+
+  // При монтировании загружаем с сохранёнными фильтрами
+  useEffect(() => {
+    refetch(filters);
+  }, []); // пустой массив – только один раз при монтировании
 
   const handleSearch = () => {
-    if (!loading) refetch(filters);
+    if (!loading) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(filters));
+      refetch(filters);
+    }
+  };
+
+  // При изменении фильтров (без поиска) можно тоже сохранять, но по логике сохраняем только после нажатия "Найти"
+  // Однако для согласованности можно обновлять localStorage при каждом изменении:
+  const handleFiltersChange = (newFilters) => {
+    setFilters(newFilters);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(newFilters));
   };
 
   return (
     <div className="tracks-page">
       <FiltersPanel
         filters={filters}
-        onChange={setFilters}
+        onChange={handleFiltersChange}
         onSearch={handleSearch}
         loading={loading}
         labels={labels}

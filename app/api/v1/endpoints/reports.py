@@ -4,6 +4,8 @@ import shutil
 import os
 from uuid import uuid4
 from celery import chain
+from sqlalchemy import text
+from core.database import sync_engine
 from tasks.report_tasks import (
     process_report_file, update_catalog_dictionaries_from_report,
     insert_data_into_final_report_table, group_report_data, find_lost_track,
@@ -22,6 +24,153 @@ class ReportDataRequest(BaseModel):
     year: int
 
 STORAGE_DIR = "/app/storage"
+
+
+@router.get("/partners")
+async def get_partners():
+    """Return list of partners as id/label (code + service_name)."""
+    try:
+        with sync_engine.connect() as conn:
+            rows = conn.execute(text("SELECT id, COALESCE(code, id::text) || ' - ' || service_name AS label FROM partners ORDER BY service_name"))
+            result = [{"id": r.id, "label": r.label} for r in rows]
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/right_categories")
+async def get_right_categories():
+    """Return right categories."""
+    try:
+        with sync_engine.connect() as conn:
+            rows = conn.execute(text("SELECT id, name AS label FROM right_category ORDER BY name"))
+            result = [{"id": r.id, "label": r.label} for r in rows]
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/right_usage_types")
+async def get_right_usage_types():
+    """Return right usage types."""
+    try:
+        with sync_engine.connect() as conn:
+            rows = conn.execute(text("SELECT id, code || ' - ' || name AS label FROM right_usage_type ORDER BY id"))
+            result = [{"id": r.id, "label": r.label} for r in rows]
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+from pydantic import BaseModel
+from typing import List, Optional
+
+
+class PartnerItem(BaseModel):
+    organization_name: str
+    service_name: str
+    contract_number: Optional[str] = None
+    right_usage_type_id: Optional[int] = None
+    note: Optional[str] = None
+    code: Optional[str] = None
+
+
+class RightCategoryItem(BaseModel):
+    name: str
+
+
+class RightUsageTypeItem(BaseModel):
+    code: str
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+@router.post("/fill_partners")
+async def fill_partners(items: List[PartnerItem]):
+    """Upsert partners from provided list. Matches on (organization_name, service_name)."""
+    try:
+        inserted = 0
+        updated = 0
+        with sync_engine.begin() as conn:
+            for it in items:
+                # check exists
+                row = conn.execute(text("SELECT id FROM partners WHERE organization_name = :org AND service_name = :svc"), {
+                    "org": it.organization_name,
+                    "svc": it.service_name,
+                }).fetchone()
+                if row:
+                    conn.execute(text(
+                        "UPDATE partners SET contract_number = :contract_number, right_usage_type_id = :rut, note = :note, code = COALESCE(:code, code) WHERE id = :id"
+                    ), {
+                        "contract_number": it.contract_number,
+                        "rut": it.right_usage_type_id,
+                        "note": it.note,
+                        "code": it.code,
+                        "id": row.id,
+                    })
+                    updated += 1
+                else:
+                    conn.execute(text(
+                        "INSERT INTO partners (organization_name, service_name, contract_number, right_usage_type_id, note, code) VALUES (:org, :svc, :contract_number, :rut, :note, :code)"
+                    ), {
+                        "org": it.organization_name,
+                        "svc": it.service_name,
+                        "contract_number": it.contract_number,
+                        "rut": it.right_usage_type_id,
+                        "note": it.note,
+                        "code": it.code,
+                    })
+                    inserted += 1
+
+        return {"inserted": inserted, "updated": updated}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/fill_right_categories")
+async def fill_right_categories(items: List[RightCategoryItem]):
+    """Insert missing right categories from provided list (no-op if exists)."""
+    try:
+        inserted = 0
+        with sync_engine.begin() as conn:
+            for it in items:
+                # insert only if not exists
+                conn.execute(text(
+                    "INSERT INTO right_category (name) SELECT :name WHERE NOT EXISTS (SELECT 1 FROM right_category WHERE name = :name)"
+                ), {"name": it.name})
+                # rowcount not reliable for this construct; compute existence after
+                r = conn.execute(text("SELECT id FROM right_category WHERE name = :name"), {"name": it.name}).fetchone()
+                if r:
+                    inserted += 1
+
+        return {"processed": len(items), "inserted_or_existing": inserted}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/fill_right_usage_types")
+async def fill_right_usage_types(items: List[RightUsageTypeItem]):
+    """Upsert right usage types matching on code."""
+    try:
+        inserted = 0
+        updated = 0
+        with sync_engine.begin() as conn:
+            for it in items:
+                row = conn.execute(text("SELECT id FROM right_usage_type WHERE code = :code"), {"code": it.code}).fetchone()
+                if row:
+                    conn.execute(text(
+                        "UPDATE right_usage_type SET name = COALESCE(:name, name), description = COALESCE(:description, description) WHERE id = :id"
+                    ), {"name": it.name, "description": it.description, "id": row.id})
+                    updated += 1
+                else:
+                    conn.execute(text(
+                        "INSERT INTO right_usage_type (code, name, description) VALUES (:code, :name, :description)"
+                    ), {"code": it.code, "name": it.name, "description": it.description})
+                    inserted += 1
+
+        return {"inserted": inserted, "updated": updated}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/upload")
 async def upload_report(file: UploadFile = File(...)):

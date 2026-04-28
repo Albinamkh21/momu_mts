@@ -1,4 +1,5 @@
 import os
+import re as _re
 import uuid
 from datetime import datetime
 import time
@@ -6,99 +7,21 @@ import polars as pl
 from polars import lit
 from sqlalchemy import create_engine, text
 from core.celery_app import celery_app
+from celery import current_task
 from .utils import clean_null_bytes
-from .catalog_tasks_v2 import (
-    _sync_labels_v2,
-    _sync_persons_v2,
-    _sync_releases_v2,
-    _sync_tracks_v2,
-    _build_track_map_v2,
-    _sync_track_releases_v2,
-    _sync_track_contributions_v2,
-    _sync_track_labels_v2,
-    _cleanup_staging_v2
-)
 
-def _sync_right_holders_v1(conn, upload_id):
-    """3. ЗАПОЛНЯЕМ RIGHT_HOLDER для v1"""
-    t0 = time.time()
-    result_rights = conn.execute(
-        text("""
-        WITH right_holder_names AS (
-            SELECT DISTINCT TRIM(ar_label_treaty_number_1) AS name FROM staging_catalog WHERE ar_label_treaty_number_1 IS NOT NULL AND TRIM(ar_label_treaty_number_1) != '' AND upload_id = :upload_id
-            UNION
-            SELECT DISTINCT TRIM(ar_label_treaty_number_2) AS name FROM staging_catalog WHERE ar_label_treaty_number_2 IS NOT NULL AND TRIM(ar_label_treaty_number_2) != '' AND upload_id = :upload_id
-            UNION
-            SELECT DISTINCT TRIM(ar_label_treaty_number_3) AS name FROM staging_catalog WHERE ar_label_treaty_number_3 IS NOT NULL AND TRIM(ar_label_treaty_number_3) != '' AND upload_id = :upload_id
-            UNION
-            SELECT DISTINCT TRIM(rr_label_treaty_number_1) AS name FROM staging_catalog WHERE rr_label_treaty_number_1 IS NOT NULL AND TRIM(rr_label_treaty_number_1) != '' AND upload_id = :upload_id
-            UNION
-            SELECT DISTINCT TRIM(rr_label_treaty_number_2) AS name FROM staging_catalog WHERE rr_label_treaty_number_2 IS NOT NULL AND TRIM(rr_label_treaty_number_2) != '' AND upload_id = :upload_id
-            UNION
-            SELECT DISTINCT TRIM(rr_label_treaty_number_3) AS name FROM staging_catalog WHERE rr_label_treaty_number_3 IS NOT NULL AND TRIM(rr_label_treaty_number_3) != '' AND upload_id = :upload_id
-        )
-        INSERT INTO right_holder (name)
-        SELECT name FROM right_holder_names
-        ON CONFLICT (name) DO NOTHING
-        RETURNING id;
-        """), {"upload_id": upload_id}
-    )
-    count = result_rights.rowcount
-    elapsed = time.time() - t0
-    print(f"✅ Right holders (v1) вставлено: {count} ({elapsed:.1f} сек)")
-    return count
+from services.broadcaster import TaskProgress
 
-def _sync_track_rights_v1(conn, upload_id):
-    """7. ЗАПОЛНЯЕМ TRACK_RIGHT для v1"""
-    t0 = time.time()
-    mapping = [
-        ("ar_label_treaty_number_1", "author_right_1", "Author"),
-        ("ar_label_treaty_number_2", "author_right_2", "Author"),
-        ("ar_label_treaty_number_3", "author_right_3", "Author"),
-        ("rr_label_treaty_number_1", "related_right_id_1", "Related"),
-        ("rr_label_treaty_number_2", "related_right_id_2", "Related"),
-        ("rr_label_treaty_number_3", "related_right_id_3", "Related"),
-    ]
-    track_rights_count = 0
-    for holder_col, share_col, cat_name in mapping:
-        sql = f"""
-        INSERT INTO track_right (track_id, contract_id, right_holder_id, right_category_id, right_usage_type_id, share_percentage)
-        SELECT DISTINCT ON (map.track_id, rh.id, rc.id, rut.id)
-            map.track_id,
-            NULL::BIGINT,
-            rh.id,
-            rc.id,
-            rut.id,
-            COALESCE(NULLIF(REGEXP_REPLACE(TRIM(sc.{share_col}::text), '[^0-9.]', '', 'g'), '')::NUMERIC, 0.0)
-        FROM staging_catalog sc
-        JOIN tmp_track_map map ON map.staging_id = sc.id
-        JOIN right_holder rh ON rh.name = TRIM(sc.{holder_col})
-        JOIN right_category rc ON rc.name = '{cat_name}'
-        JOIN right_usage_type rut ON rut.code = sc.types_of_rights
-        WHERE sc.{holder_col} IS NOT NULL AND TRIM(sc.{holder_col}) != ''
-        AND sc.upload_id = :upload_id
-        AND NOT EXISTS (
-            SELECT 1 FROM track_right tr
-            WHERE tr.track_id = map.track_id
-            AND tr.right_holder_id = rh.id
-            AND tr.right_category_id = rc.id
-            AND tr.right_usage_type_id = rut.id
-        )
-        ORDER BY map.track_id, rh.id, rc.id, rut.id;
-        """
-        result = conn.execute(text(sql), {"upload_id": upload_id})
-        count = result.rowcount
-        track_rights_count += count
-        print(f"✅ В {cat_name} ({holder_col}) вставлено: {count}")
-    elapsed = time.time() - t0
-    print(f"🏁 ИТОГО вставлено в track_right (v1): {track_rights_count} ({elapsed:.1f} сек)")
-    return track_rights_count
+
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 
 @celery_app.task(name="process_catalog_file", bind=True)
 def process_catalog_file(self, file_path: str, user_id: str, original_filename: str = ""):
+    task_id = self.request.id
     print(f"📂 Task process_catalog_file[{self.request.id}] файл: {original_filename}")
+    TaskProgress.emit(task_id, f"📂 Task process_catalog_file[{self.request.id}] файл: {original_filename}")
     if not os.path.exists(file_path):
         return {"status": "error", "message": "File not found"}
 
@@ -177,55 +100,16 @@ def process_catalog_file(self, file_path: str, user_id: str, original_filename: 
                 engine="adbc"
             )
             print(f"📦 Загружен батч: {i} - {i + len(chunk)}")
+            TaskProgress.emit(task_id, f"📦 Загружен батч: {i} - {i + len(chunk)}")
 
         os.remove(file_path)
         return {"status": "success", "total_rows": total_rows, "upload_id": upload_id}
 
     except Exception as e:
         print(f"❌ Ошибка воркера: {str(e)}")
+        TaskProgress.emit(task_id, f"❌ Ошибка воркера: {str(e)}")
         return {"status": "error", "message": str(e)}
 
-
-@celery_app.task(name="sync_catalog_dictionaries")
-def sync_catalog_dictionaries(prev_result):
-    upload_id = prev_result.get("upload_id") if isinstance(prev_result, dict) else prev_result
-    staging_table = "staging_catalog"
-    try:
-        with engine.begin() as conn:
-            print("📋 Начинаем синхронизацию справочников...")
-
-            labels_count = _sync_labels_v2(conn, upload_id, staging_table)
-            persons_count = _sync_persons_v2(conn, upload_id, staging_table)
-            rights_count = _sync_right_holders_v1(conn, upload_id)
-            releases_count = _sync_releases_v2(conn, upload_id, staging_table)
-            tracks_count = _sync_tracks_v2(conn, upload_id, staging_table)
-
-            _build_track_map_v2(conn, upload_id, staging_table)
-
-            track_release_count = _sync_track_releases_v2(conn, upload_id, staging_table)
-            contributions_count = _sync_track_contributions_v2(conn, upload_id, staging_table)
-            track_rights_count = _sync_track_rights_v1(conn, upload_id)
-            _sync_track_labels_v2(conn, upload_id, staging_table)
-
-            _cleanup_staging_v2(conn, upload_id, staging_table)
-
-            return {
-                "status": "success",
-                "stats": {
-                    "labels": labels_count,
-                    "persons": persons_count,
-                    "right_holders": rights_count,
-                    "releases": releases_count,
-                    "tracks": tracks_count,
-                    "track_releases": track_release_count,
-                    "track_contributions": contributions_count,
-                    "track_rights": track_rights_count
-                }
-            }
-
-    except Exception as e:
-        print(f"❌ Ошибка заполнения справочников: {e}")
-        return {"status": "error", "message": str(e)}
 
 
 @celery_app.task(name="check_catalog_integrity")
@@ -451,14 +335,20 @@ def check_catalog_integrity():
 
 
 
-@celery_app.task(name="export_normalized_catalog_to_flat")
-def export_normalized_catalog_to_flat(output_path: str = None, label_id: int = None):
-    # Build WHERE clause if label_id is provided
-    where_clause = "WHERE tl.label_id = :label_id" if label_id else ""
+@celery_app.task(name="export_normalized_catalog_to_flat", bind=True)
+def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: int = None):
+
+    task_id = self.request.id
+    TaskProgress.emit(task_id, f"✅Выгрузка каталога: {output_path}")
+    print(f"DEBUG: Task started task_id={task_id}, label_id={label_id}, type={type(label_id)}")
+    TaskProgress.emit(task_id, f"DEBUG: Task started task_id={task_id}, label_id={label_id}, type={type(label_id)}")
+
+    # Условие фильтрации по лейблу
+    where_clause = "WHERE tl.label_id = :label_id" if label_id else "LIMIT 50"
     
+    # Один мощный SQL запрос, который собирает всё в нужном плоском формате
     query = f"""
         WITH authors_flat AS (
-            -- Группируем авторов строго по track_id (НЕ по ISRC!)
             SELECT 
                 tc.track_id,
                 string_agg(DISTINCT p.full_name, ', ') FILTER (WHERE tc.role = 'artist_name') AS artist_name,
@@ -470,41 +360,32 @@ def export_normalized_catalog_to_flat(output_path: str = None, label_id: int = N
             JOIN person p ON p.id = tc.person_id
             GROUP BY tc.track_id
         ),
-        rights_agg AS (
-            -- Группируем права строго по track_id (НЕ по ISRC!)
+        rights_flat AS (
             SELECT 
                 tr.track_id,
-                SUM(tr.share_percentage) FILTER (WHERE rc.name = 'Author') AS total_author_right,
-                SUM(tr.share_percentage) FILTER (WHERE rc.name = 'Related') AS total_related_right,
-                -- Ранги для распределения по колонкам
-                MAX(CASE WHEN rc.name = 'Author' AND rank = 1 THEN tr.share_percentage END) AS ar_share_1,
-                MAX(CASE WHEN rc.name = 'Author' AND rank = 1 THEN rh.name END) AS ar_holder_1,
-                MAX(CASE WHEN rc.name = 'Author' AND rank = 2 THEN tr.share_percentage END) AS ar_share_2,
-                MAX(CASE WHEN rc.name = 'Author' AND rank = 2 THEN rh.name END) AS ar_holder_2,
-                MAX(CASE WHEN rc.name = 'Author' AND rank = 3 THEN tr.share_percentage END) AS ar_share_3,
-                MAX(CASE WHEN rc.name = 'Author' AND rank = 3 THEN rh.name END) AS ar_holder_3,
-                MAX(CASE WHEN rc.name = 'Related' AND rank = 1 THEN tr.share_percentage END) AS rr_share_1,
-                MAX(CASE WHEN rc.name = 'Related' AND rank = 1 THEN rh.name END) AS rr_holder_1,
-                MAX(CASE WHEN rc.name = 'Related' AND rank = 2 THEN tr.share_percentage END) AS rr_share_2,
-                MAX(CASE WHEN rc.name = 'Related' AND rank = 2 THEN rh.name END) AS rr_holder_2,
-                MAX(CASE WHEN rc.name = 'Related' AND rank = 3 THEN tr.share_percentage END) AS rr_share_3,
-                MAX(CASE WHEN rc.name = 'Related' AND rank = 3 THEN rh.name END) AS rr_holder_3
-            FROM (
-                SELECT tr.*, 
-                       row_number() OVER (PARTITION BY tr.track_id, tr.right_category_id ORDER BY tr.id) as rank 
-                FROM track_right tr
-            ) tr
+                -- Авторские права
+                MAX(rh.name) FILTER (WHERE rc.name = 'Author') AS ar_label_treaty_number,
+                SUM(tr.share_percentage) FILTER (WHERE rc.name = 'Author' AND rut.code = 'INT') AS author_right_INT,
+                SUM(tr.share_percentage) FILTER (WHERE rc.name = 'Author' AND rut.code = 'MOB') AS author_right_MOB,
+                SUM(tr.share_percentage) FILTER (WHERE rc.name = 'Author' AND rut.code = 'PUB') AS author_right_PUB,
+                -- Смежные права
+                MAX(rh.name) FILTER (WHERE rc.name = 'Related') AS rr_label_treaty_number,
+                SUM(tr.share_percentage) FILTER (WHERE rc.name = 'Related' AND rut.code = 'INT') AS related_right_id_INT,
+                SUM(tr.share_percentage) FILTER (WHERE rc.name = 'Related' AND rut.code = 'MOB') AS related_right_id_MOB,
+                SUM(tr.share_percentage) FILTER (WHERE rc.name = 'Related' AND rut.code = 'PUB') AS related_right_id_PUB
+            FROM track_right tr
             JOIN right_category rc ON rc.id = tr.right_category_id
+            JOIN right_usage_type rut ON rut.id = tr.right_usage_type_id
             JOIN right_holder rh ON rh.id = tr.right_holder_id
             GROUP BY tr.track_id
         )
         SELECT DISTINCT ON (t.id)
-            COALESCE(r.upc, 'NO_UPC')::TEXT AS upc,
+            COALESCE(r.upc, '')::TEXT AS upc,
             t.isrc::TEXT, 
             t.title::TEXT AS track_name,
             (t.meta->>'genre')::TEXT AS genre_name,
-            COALESCE(r.title, 'NO_RELEASE')::TEXT AS album_name,
-            NULL::TEXT AS album_single,
+            COALESCE(r.title, '')::TEXT AS album_name,
+           
             (t.meta->>'track_number')::TEXT AS track_number,
             af.artist_name,
             af.track_artist_name,
@@ -513,91 +394,86 @@ def export_normalized_catalog_to_flat(output_path: str = None, label_id: int = N
             af.authors,
             CASE WHEN t.explicit THEN 'Да' ELSE 'Нет' END AS explicit,
             to_char(t.duration, 'MI:SS') AS duration,
-            COALESCE(l.name, 'NO_LABEL')::TEXT AS label_name,
-            ra.total_author_right,
+            COALESCE(l.name, '')::TEXT AS label_name,
             t.label_own_code::TEXT AS right_id,
-            ra.ar_share_1 AS author_right_1,
-            ra.ar_holder_1 AS ar_label_treaty_number_1,
-            ra.ar_share_2 AS author_right_2,
-            ra.ar_holder_2 AS ar_label_treaty_number_2,
-            ra.ar_share_3 AS author_right_3,
-            ra.ar_holder_3 AS ar_label_treaty_number_3,
-            ra.total_related_right,
-            ra.rr_share_1 AS related_right_id_1,
-            ra.rr_holder_1 AS rr_label_treaty_number_1,
-            ra.rr_share_2 AS related_right_id_2,
-            ra.rr_holder_2 AS rr_label_treaty_number_2,
-            ra.rr_share_3 AS related_right_id_3,
-            ra.rr_holder_3 AS rr_label_treaty_number_3,
-            (t.meta->>'types_of_rights')::TEXT AS types_of_rights,
-            (t.meta->>'countries')::TEXT AS countries,
-            NULL::TEXT AS create_date,
-            COALESCE(r.release_date, NULL)::TEXT AS release_date,
-            (t.meta->>'sales_start_date')::TEXT AS sales_start_date,
-            CASE WHEN (t.meta->>'has_ringtone')::boolean THEN 'Да' ELSE 'Нет' END AS has_ringtone,
-            (t.meta->>'ringtone_upc')::TEXT AS ringtone_upc,
-            (t.meta->>'ringtone_isrc')::TEXT AS ringtone_isrc,
-            CASE WHEN (t.meta->>'has_vclip')::boolean THEN 'Да' ELSE 'Нет' END AS has_vclip,
-            (t.meta->>'vclip_isrc')::TEXT AS vclip_isrc,
-            (t.meta->>'video_upc')::TEXT AS video_upc,
-            CASE WHEN (t.meta->>'has_lyrics')::boolean THEN 'Да' ELSE 'Нет' END AS has_lyrics,
-            CASE WHEN (t.meta->>'has_ttml')::boolean THEN 'Да' ELSE 'Нет' END AS has_ttml,
-            NULL::TEXT AS effective_date,
-            NULL::TEXT AS termination_date,
-            COALESCE(r.status, '')::TEXT AS active_inactive,
-            t.resource_reference::TEXT
+            -- Колонки прав (Author)
+            COALESCE(rf.author_right_INT, 0)::TEXT AS author_right_INT,
+            COALESCE(rf.author_right_MOB, 0)::TEXT AS author_right_MOB,
+            COALESCE(rf.author_right_PUB, 0)::TEXT AS author_right_PUB,
+            COALESCE(rf.ar_label_treaty_number, '')::TEXT AS ar_label_treaty_number,
+            -- Колонки прав (Related)
+            COALESCE(rf.related_right_id_INT, 0)::TEXT AS related_right_id_INT,
+            COALESCE(rf.related_right_id_MOB, 0)::TEXT AS related_right_id_MOB,
+            COALESCE(rf.related_right_id_PUB, 0)::TEXT AS related_right_id_PUB,
+            COALESCE(rf.rr_label_treaty_number, '')::TEXT AS rr_label_treaty_number
+           
         FROM track t
         LEFT JOIN authors_flat af ON af.track_id = t.id
-        LEFT JOIN rights_agg ra ON ra.track_id = t.id
-        LEFT JOIN release r ON r.id = t.release_id
+        LEFT JOIN rights_flat rf ON rf.track_id = t.id
+        LEFT JOIN track_release tr ON tr.track_id = t.id  
+        LEFT JOIN release r ON r.id = tr.release_id
         LEFT JOIN track_label tl ON tl.track_id = t.id
         LEFT JOIN label l ON l.id = tl.label_id
-
-        
         {where_clause} 
         ORDER BY t.id;
     """
-    
+
     try:
         with engine.connect() as conn:
-            # Use SQLAlchemy text with parameters
             if label_id:
-                df = pl.read_database(
-                    query=text(query).params(label_id=label_id),
-                    connection=conn,
-                    infer_schema_length=None
-                )
+                stmt = text(query).params(label_id=label_id)
             else:
-                df = pl.read_database(
-                    query=query, 
-                    connection=conn,
-                    infer_schema_length=None
-                )
+                stmt = text(query)
+            
+            df = pl.read_database(query=stmt, connection=conn, infer_schema_length=None)
 
-        if output_path:
-            if output_path.endswith('.xlsx'):
-                df.write_excel(output_path)
-            else:
-                df.write_csv(output_path)
-            return {"status": "success", "rows_exported": len(df), "path": output_path}
+        if df.is_empty():
+            TaskProgress.emit(task_id, "❌ Нет данных для выгрузки", level="error")
+            return {"status": "error", "message": "Нет данных для выгрузки"}
+
+
+        target_columns = [
+            "upc", "isrc", "track_name", "genre_name", "album_name",
+            "track_number", "artist_name", "track_artist_name",
+            "composer", "lyricist", "authors", "explicit", "duration",
+            "label_name", "right_id", 
+            "author_right_int", "author_right_mob", "author_right_pub", "ar_label_treaty_number",
+            "related_right_id_int", "related_right_id_mob", "related_right_id_pub", "rr_label_treaty_number"
+       
+        ]
         
-        return {"status": "success", "total_rows": len(df), "sample": df.head(5).to_dicts()}
+     
+        df = df.select(target_columns).fill_null("")
+
+        # Путь сохранения
+        storage_dir = output_path or "/app/storage"
+        os.makedirs(storage_dir, exist_ok=True)
+        
+        # Формируем имя файла
+        filename = f"catalog_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        full_path = os.path.join(storage_dir, filename)
+
+        TaskProgress.emit(task_id, f"✅Данные собраны: {len(df)} строк. Начинаем сохранение...")
+        df.write_excel(full_path)
+        TaskProgress.emit(task_id, f"✅Файл сохранён: {full_path}")
+        return {"status": "success", "rows_exported": len(df), "path": full_path}
 
     except Exception as e:
-        print(f"❌ Ошибка экспорта каталога: {e}")
+        print(f"❌ Ошибка экспорта: {e}")
+        TaskProgress.emit(task_id, f"❌ Ошибка экспорта: {e}")
         return {"status": "error", "message": str(e)}
 
 
 
-
-@celery_app.task(name="delete_data_from_all_dictionaries_by_label")
-def delete_data_from_all_dictionaries_by_label(label_id: int):
+@celery_app.task(name="delete_data_from_all_dictionaries_by_label", bind=True)
+def delete_data_from_all_dictionaries_by_label(self, label_id: int):
     """
     Удаляет все данные о треках, связях и правах, привязанных к указанному лейблу.
     Базовые справочники (label, person, right_holder, right_category,
     right_usage_type, finding_source, partners, contract) остаются нетронутыми.
     """
     try:
+        task_id = self.request.id
         with engine.begin() as conn:
             # 1. Находим все track_id, привязанные к лейблу
             track_ids_result = conn.execute(text("""
@@ -606,45 +482,69 @@ def delete_data_from_all_dictionaries_by_label(label_id: int):
             track_ids = [row[0] for row in track_ids_result.fetchall()]
 
             if not track_ids:
-                return {"status": "success", "message": "Нет треков для данного лейбла", "deleted": {}}
+                TaskProgress.emit(task_id, f"🗑️ Нет треков для данного лейбла")
+                return {"status": "success", "label_id": label_id, "message": "Нет треков для данного лейбла", "deleted": {}}
+  
 
             print(f"🗑️ Найдено треков для удаления: {len(track_ids)}")
+            TaskProgress.emit(task_id, f"🗑️ Найдено треков для удаления: {len(track_ids)}")
+
+
+            # 6. Удаляем track_label (все связи этих треков, не только текущий лейбл)
+            r_track_label = conn.execute(text("""
+                DELETE FROM track_label WHERE track_id = ANY(:ids)  and label_id = :label_id
+            """), {"ids": track_ids, "label_id": label_id})
+            print(f"✅ track_label удалено: {r_track_label.rowcount}")
+            TaskProgress.emit(task_id, f"✅ track_label удалено: {r_track_label.rowcount}")
+
+            
+            # 3. Определяем, какие треки остались без лейблов (осиротели)
+            remaining_tracks = conn.execute(text("""
+                SELECT DISTINCT track_id FROM track_label WHERE track_id = ANY(:ids)
+            """), {"ids": track_ids}).fetchall()
+            remaining_track_ids = {row[0] for row in remaining_tracks}
+
+            orphan_track_ids = [tid for tid in track_ids if tid not in remaining_track_ids]
+            TaskProgress.emit(task_id, f"✅ Найдено осиротевших треков: {len(orphan_track_ids)}")
+
 
             # 2. Удаляем report (нет ON DELETE CASCADE)
             r_report = conn.execute(text("""
                 DELETE FROM report WHERE track_id = ANY(:ids)
-            """), {"ids": track_ids})
+            """), {"ids": orphan_track_ids})
             print(f"✅ report удалено: {r_report.rowcount}")
+            TaskProgress.emit(task_id, f"✅ report удалено: {r_report.rowcount}")
 
             # 3. Удаляем track_right
             r_track_right = conn.execute(text("""
-                DELETE FROM track_right WHERE track_id = ANY(:ids)
-            """), {"ids": track_ids})
+                DELETE FROM track_right WHERE track_id = ANY(:ids) and right_holder_id IN (select id from right_holder where label_id = :label_id)
+                
+            """), {"ids": track_ids, "label_id": label_id})
             print(f"✅ track_right удалено: {r_track_right.rowcount}")
+            TaskProgress.emit(task_id, f"✅ track_right удалено: {r_track_right.rowcount}")
 
             # 4. Удаляем track_contribution
             r_track_contribution = conn.execute(text("""
-                DELETE FROM track_contribution WHERE track_id = ANY(:ids)
-            """), {"ids": track_ids})
+                DELETE FROM track_contribution WHERE track_id = ANY(:ids) 
+            """), {"ids": orphan_track_ids})
             print(f"✅ track_contribution удалено: {r_track_contribution.rowcount}")
+            TaskProgress.emit(task_id, f"✅ track_contribution удалено: {r_track_contribution.rowcount}")
 
             # 5. Удаляем track_release
             r_track_release = conn.execute(text("""
                 DELETE FROM track_release WHERE track_id = ANY(:ids)
-            """), {"ids": track_ids})
+            """), {"ids": orphan_track_ids})
             print(f"✅ track_release удалено: {r_track_release.rowcount}")
+            TaskProgress.emit(task_id, f"✅ track_release удалено: {r_track_release.rowcount}")
 
-            # 6. Удаляем track_label (все связи этих треков, не только текущий лейбл)
-            r_track_label = conn.execute(text("""
-                DELETE FROM track_label WHERE track_id = ANY(:ids)
-            """), {"ids": track_ids})
-            print(f"✅ track_label удалено: {r_track_label.rowcount}")
+        
 
             # 7. Удаляем сами треки
             r_tracks = conn.execute(text("""
                 DELETE FROM track WHERE id = ANY(:ids)
-            """), {"ids": track_ids})
+            """), {"ids": orphan_track_ids})
             print(f"✅ track удалено: {r_tracks.rowcount}")
+            TaskProgress.emit(task_id, f"✅ track удалено: {r_tracks.rowcount}")
 
             # 8. Удаляем осиротевшие релизы (без треков)
             r_releases = conn.execute(text("""
@@ -655,6 +555,24 @@ def delete_data_from_all_dictionaries_by_label(label_id: int):
                 )
             """), {"label_id": label_id})
             print(f"✅ release (осиротевших) удалено: {r_releases.rowcount}")
+            TaskProgress.emit(task_id, f"✅ release (осиротевших) удалено: {r_releases.rowcount}")
+
+            # 9. Удаляем осиротевших артистов (у которых больше нет контрибьюций)
+            r_persons = conn.execute(text("""
+                DELETE FROM person p
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM track_contribution tc WHERE tc.person_id = p.id
+                )
+            """))
+            print(f"✅ person (осиротевших) удалено: {r_persons.rowcount}")
+            TaskProgress.emit(task_id, f"✅ person (осиротевших) удалено: {r_persons.rowcount}")
+
+            r_right_holders = conn.execute(text("""
+                DELETE FROM right_holder rh
+                WHERE NOT EXISTS (SELECT 1 FROM track_right tr WHERE tr.right_holder_id = rh.id)
+            """))
+            print(f"✅ right_holder (осиротевших) удалено: {r_right_holders.rowcount}")
+            TaskProgress.emit(task_id, f"✅ right_holder (осиротевших) удалено: {r_right_holders.rowcount}")
 
             stats = {
                 "tracks": r_tracks.rowcount,
@@ -664,13 +582,17 @@ def delete_data_from_all_dictionaries_by_label(label_id: int):
                 "track_releases": r_track_release.rowcount,
                 "track_labels": r_track_label.rowcount,
                 "releases": r_releases.rowcount,
+                "persons": r_persons.rowcount
+
             }
 
             print(f"🏁 Удаление по лейблу {label_id} завершено: {stats}")
+            TaskProgress.emit(task_id, f"🏁 Удаление по лейблу {label_id} завершено: {stats}")
             return {"status": "success", "label_id": label_id, "deleted": stats}
 
     except Exception as e:
         print(f"❌ Ошибка удаления по лейблу: {e}")
+        TaskProgress.emit(task_id, f"❌ Ошибка удаления по лейблу: {e}")
         return {"status": "error", "message": str(e)}
 
 

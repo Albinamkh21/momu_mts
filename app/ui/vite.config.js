@@ -10,7 +10,11 @@ export default defineConfig({
       '/api': {
         target: 'http://app:8000',
         changeOrigin: true,
-      }
+      },
+      '/ws': {
+        target: 'ws://app:8000',
+        ws: true, 
+      },
     },
     watch: {
       usePolling: true // Нужно для корректной работы hot-reload в Docker

@@ -7,7 +7,7 @@ celery_app = Celery(
     "momu_project",
     broker=os.getenv("CELERY_BROKER_URL", "redis://momu_redis:6379/0"),
     backend=os.getenv("CELERY_RESULT_BACKEND", "redis://momu_redis:6379/0"),
-    include=["tasks.catalog_tasks", "tasks.report_tasks"],
+    include=["tasks.catalog_tasks", "tasks.report_tasks", "tasks.catalog_tasks_v2"],
 )
 
 

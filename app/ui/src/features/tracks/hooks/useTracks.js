@@ -14,6 +14,8 @@ export const useTracks = () => {
       if (filters.isrc) params.isrc = filters.isrc;
       if (filters.label_own_code) params.label_own_code = filters.label_own_code;
       if (filters.label_id) params.label_id = filters.label_id;
+      if (filters.artist_name) params.artist_name = filters.artist_name;
+      if (filters.author_name) params.author_name = filters.author_name;
       const res = await getTracks(params);
       setData(res);
     } catch (err) {

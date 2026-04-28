@@ -55,6 +55,29 @@ export const FiltersPanel = ({ filters, onChange, onSearch, loading, labels }) =
               placeholder="Код..."
             />
           </div>
+          <div className="filter-field">
+            <label className="filter-field__label">Исполнитель (artist)</label>
+            <input
+              className={`filter-field__input ${loading ? 'filter-field__input--disabled' : ''}`}
+              value={filters.artist_name || ''}
+              onChange={set('artist_name')}
+              onKeyDown={handleKeyDown}
+              disabled={loading}
+              placeholder="Имя исполнителя..."
+            />
+          </div>
+
+          <div className="filter-field">
+            <label className="filter-field__label">Авторы (composer / lyricist)</label>
+            <input
+              className={`filter-field__input ${loading ? 'filter-field__input--disabled' : ''}`}
+              value={filters.author_name || ''}
+              onChange={set('author_name')}
+              onKeyDown={handleKeyDown}
+              disabled={loading}
+              placeholder="Имя автора..."
+            />
+          </div>
 
           <div className="filter-field">
             <label className="filter-field__label">Лейбл</label>

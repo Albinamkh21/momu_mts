@@ -1,14 +1,22 @@
+// src/App.jsx
 import React, { useState } from 'react';
 import { MainLayout } from './components/Layout/MainLayout';
 import { TracksPage } from './features/tracks/TracksPage';
 import { TrackDetailPage } from './features/tracks/TrackDetailPage';
 import { PersonDetailPage } from './features/tracks/PersonDetailPage';
+import { CatalogPage } from './features/catalog/CatalogPage';
+import { ReportPage } from './features/report/ReportPage';
+import './assets/style/minimal.css';
 
 function App() {
   const [page, setPage] = useState({ type: 'list' });
 
   const goToTrack = (id) => setPage({ type: 'track', id });
   const goToPerson = (id) => setPage({ type: 'person', id, prev: page });
+  const goToCatalog = () => setPage({ type: 'catalog', prev: page });
+  const goToReport = () => setPage({ type: 'report', prev: page });
+  const goToTracks = () => setPage({ type: 'list', prev: page });
+
   const goBack = () => {
     if (page.prev) {
       setPage(page.prev);
@@ -18,24 +26,28 @@ function App() {
   };
 
   return (
-    <MainLayout>
+    <MainLayout currentPage={page.type} onMenuClick={(mod) => mod === 'catalog' ? goToCatalog() : (mod === 'report' ? goToReport() : goToTracks())}>
+      
       {page.type === 'track' && (
-        <TrackDetailPage
-          trackId={page.id}
-          onBack={goBack}
-          onPersonClick={goToPerson}
-        />
+        <TrackDetailPage trackId={page.id} onBack={goBack} onPersonClick={goToPerson} />
       )}
+      
       {page.type === 'person' && (
-        <PersonDetailPage
-          personId={page.id}
-          onBack={goBack}
-          onTrackClick={goToTrack}
-        />
+        <PersonDetailPage personId={page.id} onBack={goBack} onTrackClick={goToTrack} />
       )}
+      
+      {page.type === 'catalog' && (
+        <CatalogPage />
+      )}
+
+      {page.type === 'report' && (
+        <ReportPage />
+      )}
+      
       {page.type === 'list' && (
         <TracksPage onTrackClick={goToTrack} />
       )}
+
     </MainLayout>
   );
 }

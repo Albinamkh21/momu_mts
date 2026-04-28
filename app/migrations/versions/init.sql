@@ -135,7 +135,8 @@ CREATE TABLE track_right (
     right_holder_id INTEGER REFERENCES right_holder(id),
     right_category_id INTEGER REFERENCES right_category(id),
     right_usage_type_id INTEGER REFERENCES right_usage_type(id),
-    share_percentage NUMERIC(5,2) CHECK (share_percentage BETWEEN 0 AND 100)
+    share_percentage NUMERIC(5,2) CHECK (share_percentage BETWEEN 0 AND 100),
+    region_id integer REFERENCES region(id)
 );
 
 CREATE TABLE track_label (
@@ -279,6 +280,7 @@ CREATE TABLE report (
     
 
     finding_source  INT NOT NULL REFERENCES finding_source(id) , 
+    region_id TEXT REFERENCES region(code),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -338,6 +340,20 @@ VALUES
 ON CONFLICT (name) DO UPDATE SET 
     composition_count = EXCLUDED.composition_count,
     phonogram_count = EXCLUDED.phonogram_count;
+
+
+
+
+CREATE TABLE region (
+    id SERIAL PRIMARY KEY,
+    code VARCHAR(50) UNIQUE NOT NULL, 
+    name VARCHAR(50),
+    description TEXT
+);
+
+insert into region (code, name) values 
+('ALL', 'Все страны'),
+('KZT, KGS, AMD,UZB', 'KZT, KGS, AMD,UZB');
 
 
 
@@ -457,6 +473,7 @@ CREATE INDEX IF NOT EXISTS idx_person_tokens_gin ON person USING gin (tokens);
                 isrc TEXT,
                 track_name TEXT,
                 track_name_norm_key TEXT,
+                track_name_tokens TEXT[],
                 artist_name TEXT,
                 authors TEXT,
                 service_name TEXT,
@@ -469,3 +486,35 @@ CREATE INDEX IF NOT EXISTS idx_person_tokens_gin ON person USING gin (tokens);
                 authors_tokens TEXT[],
                 authors_norm_key_full TEXT
             );
+
+
+
+
+            
+CREATE TABLE staging_person (
+    id BIGSERIAL PRIMARY KEY,
+    staging_id BIGINT,
+    full_name CITEXT UNIQUE NOT NULL,
+    full_name_norm_key TEXT,
+    tokens TEXT[], 
+    upload_id TEXT
+);
+
+-- 1. Создание таблицы
+CREATE TABLE "user" (
+    id SERIAL PRIMARY KEY,
+    full_name CITEXT NOT NULL UNIQUE,
+    login VARCHAR(255) NOT NULL UNIQUE,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL
+);
+
+-- 2. Вставка данных
+-- Для Albina используем email, подходящий под домен вашей компании
+INSERT INTO "user" (full_name, login, email, password_hash)
+VALUES (
+    'Albina Muhamedieva', 
+    'albina_admin', 
+    'a.muhamedieva@dyn-it.de', 
+    'hash_placeholder_тут_будет_реальный_хеш'
+);
