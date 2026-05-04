@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { uploadCatalogV2, downloadCatalog, deleteLabelData, getLabels } from './api/catalog.api';
 import { useTaskLogs } from '../../hooks/useTaskLogs';
+import TaskLogsPanel from '../../components/TaskLogsPanel';
 
 export function CatalogPage() {
   const [uploading, setUploading] = useState(false);
@@ -192,26 +193,17 @@ export function CatalogPage() {
         </div>
       )}
 
-      {activeTaskId && (
-        <div style={{ background: '#1e1e1e', color: '#00ff00', padding: '15px', marginTop: '20px', borderRadius: '5px', fontFamily: 'monospace' }}>
-          <div style={{ borderBottom: '1px solid #444', marginBottom: '10px', paddingBottom: '5px', color: '#aaa', display: 'flex', justifyContent: 'space-between' }}>
-            <span>Логи операции (ID: {activeTaskId})</span>
-            <button onClick={() => {
-              setActiveTaskId(null);
-              setUploading(false);
-              setDownloadLoading(false);
-              setDeleteLoading(false);
-            }} style={{ background: 'none', border: 'none', color: 'red', cursor: 'pointer' }}>Закрыть</button>
-          </div>
-          <div style={{ height: '200px', overflowY: 'auto' }}>
-            {logs.map((log, i) => (
-              <div key={i} style={{ marginBottom: '4px' }}>
-                <span style={{ color: '#888' }}>[{new Date(log.timestamp).toLocaleTimeString()}]</span> {log.message}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <TaskLogsPanel
+        activeTaskId={activeTaskId}
+        logs={logs}
+        onClose={() => {
+          setActiveTaskId(null);
+          setUploading(false);
+          setDownloadLoading(false);
+          setDeleteLoading(false);
+          setLogs([]);
+        }}
+      />
     </div>
   );
 }

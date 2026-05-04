@@ -77,12 +77,7 @@ def process_catalog_file_v2(self, file_path: str, user_id: str, original_filenam
                 .alias("explicit")
             )
 
-            chunk = chunk.with_columns(
-                pl.col("duration").map_elements(
-                    lambda x: f"00:{x}" if x and len(x) <= 5 else x,
-                    return_dtype=pl.String
-                )
-            )
+        
 
             chunk = chunk.with_columns([
                 pl.lit(upload_id).alias("upload_id"),
@@ -331,7 +326,7 @@ def _sync_tracks_v2_isrc(conn, upload_id, staging_table="staging_catalog_v2"):
             NULLIF(sc.right_id, '') AS label_own_code,
             COALESCE(NULLIF(sc.track_name, ''), 'Unknown Track') AS title,
             sc.track_name_norm_key AS title_norm_key,
-            CAST(sc.duration AS INTERVAL) AS duration,
+            sc.duration AS duration,
             sc.explicit::BOOLEAN AS explicit,
             NULLIF(sc.resource_reference, '') AS resource_reference,
             JSONB_BUILD_OBJECT(
@@ -376,7 +371,7 @@ def _sync_tracks_v2_label_code(conn, upload_id, staging_table="staging_catalog_v
             NULLIF(sc.right_id, '') AS label_own_code,
             COALESCE(NULLIF(sc.track_name, ''), 'Unknown Track') AS title,
             sc.track_name_norm_key AS title_norm_key,
-            CAST(sc.duration AS INTERVAL) AS duration,
+            sc.duration AS duration,
             sc.explicit::BOOLEAN AS explicit,
             NULLIF(sc.resource_reference, '') AS resource_reference,
             JSONB_BUILD_OBJECT(
@@ -393,12 +388,13 @@ def _sync_tracks_v2_label_code(conn, upload_id, staging_table="staging_catalog_v
                 'sales_start_date', NULLIF(sc.sales_start_date, '')
             ) AS meta
         FROM {staging_table} sc
-        WHERE  sc.isrc IS NULL AND  sc.upload_id = :upload_id 
+        WHERE  sc.isrc IS NULL AND  sc.upload_id = :upload_id and NULLIF(sc.right_id, '') IS NOT NULL
             AND NOT EXISTS (
             SELECT 1 FROM track t2 
             WHERE (sc.isrc IS NULL ) 
                  AND t2.label_own_code = NULLIF(sc.right_id, '')
                  AND t2.title_norm_key = sc.track_name_norm_key
+              
            )
         ORDER BY sc.id;
 
@@ -423,7 +419,7 @@ def _sync_tracks_v2_name(conn, upload_id, staging_table="staging_catalog_v2"):
             NULLIF(sc.right_id, '') AS label_own_code,
             COALESCE(NULLIF(sc.track_name, ''), 'Unknown Track') AS title,
             sc.track_name_norm_key AS title_norm_key,
-            CAST(sc.duration AS INTERVAL) AS duration,
+            sc.duration AS duration,
             sc.explicit::BOOLEAN AS explicit,
             NULLIF(sc.resource_reference, '') AS resource_reference,
             JSONB_BUILD_OBJECT(
@@ -481,8 +477,8 @@ def _build_track_map_v2(conn, upload_id, staging_table="staging_catalog_v2"):
         FROM {staging_table} sc
         JOIN track t ON t.title_norm_key = sc.track_name_norm_key   AND t.label_own_code = NULLIF(sc.right_id, '')
         LEFT JOIN release r ON r.upc = sc.upc
-        WHERE sc.upload_id = :upload_id   AND (sc.isrc IS NULL ); 
-
+        WHERE sc.upload_id = :upload_id   AND (sc.isrc IS NULL ) AND NULLIF(sc.right_id, '') IS NOT NULL;
+        
     
         CREATE INDEX idx_tmp_map_sid ON tmp_track_map(staging_id);
         CREATE INDEX idx_tmp_map_tid ON tmp_track_map(track_id);
@@ -583,6 +579,7 @@ def _sync_track_rights_v2(conn, upload_id, staging_table="staging_catalog_v2"):
         
         FROM {staging_table} sc
         JOIN tmp_track_map map ON map.staging_id = sc.id
+        join track_label tl ON tl.track_id = map.track_id
         JOIN right_holder rh ON rh.name = sc.{holder_col}
         JOIN right_category rc ON rc.name = '{cat_name}'
         JOIN right_usage_type rut ON rut.code = '{usage_code}'
@@ -590,10 +587,12 @@ def _sync_track_rights_v2(conn, upload_id, staging_table="staging_catalog_v2"):
         AND sc.upload_id = :upload_id
         AND NOT EXISTS (
             SELECT 1 FROM track_right tr
+            join right_holder rh2 ON rh2.id = tr.right_holder_id
             WHERE tr.track_id = map.track_id
             AND tr.right_holder_id = rh.id
             AND tr.right_category_id = rc.id
             AND tr.right_usage_type_id = rut.id
+            AND tl.label_id = rh.label_id
         )
         ORDER BY map.track_id, rh.id, rc.id, rut.id;
         """
@@ -698,6 +697,8 @@ def sync_catalog_dictionaries(self, prev_result, version="v2"):
             contributions_count = _sync_track_contributions_v2(conn, upload_id)
 
             #track_rights_count = _sync_track_rights_v2(conn, upload_id)
+            _sync_track_labels_v2(conn, upload_id, staging_table=staging_table)
+
             if version == "v2":
                 rights_count = _sync_right_holders_v2(conn, upload_id, staging_table=staging_table)
                 track_rights_count = _sync_track_rights_v2(conn, upload_id, staging_table=staging_table)
@@ -705,7 +706,7 @@ def sync_catalog_dictionaries(self, prev_result, version="v2"):
                 rights_count = _sync_right_holders_v1(conn, upload_id)
                 track_rights_count = _sync_track_rights_v1(conn, upload_id)
 
-            _sync_track_labels_v2(conn, upload_id, staging_table=staging_table)
+            #_sync_track_labels_v2(conn, upload_id, staging_table=staging_table)
 
             _cleanup_staging_v2(conn, upload_id, staging_table=staging_table)
             success = True

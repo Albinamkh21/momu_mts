@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { getPartners, getRightCategories, getRightUsageTypes, uploadReport } from './api/report.api';
+import { useTaskLogs } from '../../hooks/useTaskLogs';
+import TaskLogsPanel from '../../components/TaskLogsPanel';
 
 export function ReportPage() {
   const [partners, setPartners] = useState([]);
@@ -16,6 +18,10 @@ export function ReportPage() {
   });
   const [file, setFile] = useState(null);
   const [message, setMessage] = useState('');
+  const [activeTaskId, setActiveTaskId] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const { logs, setLogs } = useTaskLogs(activeTaskId);
 
   useEffect(() => {
     (async () => {
@@ -44,6 +50,8 @@ export function ReportPage() {
       return;
     }
 
+    setSubmitting(true);
+
     const fd = new FormData();
     fd.append('file', file);
     fd.append('partner_id', form.partner_id);
@@ -56,20 +64,40 @@ export function ReportPage() {
     try {
       setMessage('Отправка...');
       const result = await uploadReport(fd);
-      setMessage(result.message || 'Запущено');
+      if (result.task_id) {
+        setActiveTaskId(result.task_id);
+        setLogs([]);
+        setMessage('⚙️ Файл отправлен, формирование в фоне. Логи появятся ниже...');
+      } else {
+        setMessage(result.message || 'Запущено');
+        setSubmitting(false);
+      }
     } catch (err) {
       console.error(err);
       setMessage(err?.response?.data?.detail || 'Ошибка при отправке');
+      setSubmitting(false);
     }
   };
 
+  // Re-enable submit when logs indicate completion (success or error)
+  useEffect(() => {
+    if (!activeTaskId || logs.length === 0) return;
+    const lastLog = logs[logs.length - 1];
+    if (!lastLog || !lastLog.message) return;
+    const m = lastLog.message;
+    if (m.includes('✅') || m.includes('❌') || m.includes('Пайплайн завершён') || m.includes('Пайплайн завершён успешно')) {
+      setSubmitting(false);
+    }
+  }, [logs, activeTaskId]);
+
   return (
-    <div>
-      <h2>Загрузка отчёта</h2>
-      <form onSubmit={handleSubmit}>
-        <div>
-          <label>Партнёр</label>
-          <select name="partner_id" value={form.partner_id} onChange={handleChange} required>
+    <div className="page-container">
+      <h2 className="page-title">Загрузка отчёта</h2>
+
+      <form onSubmit={handleSubmit} className="action-section">
+        <div className="form-group">
+          <label className="form-label">Партнёр</label>
+          <select name="partner_id" value={form.partner_id} onChange={handleChange} required className="form-control">
             <option value="">-- выберите --</option>
             {partners.map(p => (
               <option key={p.id} value={p.id}>{p.label}</option>
@@ -77,9 +105,9 @@ export function ReportPage() {
           </select>
         </div>
 
-        <div>
-          <label>Категория прав</label>
-          <select name="right_category_id" value={form.right_category_id} onChange={handleChange} required>
+        <div className="form-group">
+          <label className="form-label">Категория прав</label>
+          <select name="right_category_id" value={form.right_category_id} onChange={handleChange} required className="form-control">
             <option value="">-- выберите --</option>
             {categories.map(c => (
               <option key={c.id} value={c.id}>{c.label || c.name}</option>
@@ -87,9 +115,9 @@ export function ReportPage() {
           </select>
         </div>
 
-        <div>
-          <label>Тип использования</label>
-          <select name="right_usage_type_id" value={form.right_usage_type_id} onChange={handleChange} required>
+        <div className="form-group">
+          <label className="form-label">Тип использования</label>
+          <select name="right_usage_type_id" value={form.right_usage_type_id} onChange={handleChange} required className="form-control">
             <option value="">-- выберите --</option>
             {usageTypes.map(u => (
               <option key={u.id} value={u.id}>{u.label || u.code}</option>
@@ -97,31 +125,42 @@ export function ReportPage() {
           </select>
         </div>
 
-        <div>
-          <label>Месяц</label>
-          <input name="month" type="number" min="1" max="12" value={form.month} onChange={handleChange} required />
+        <div className="form-group">
+          <label className="form-label">Месяц</label>
+          <input name="month" type="number" min="1" max="12" value={form.month} onChange={handleChange} required className="form-control" />
         </div>
 
-        <div>
-          <label>Год</label>
-          <input name="year" type="number" value={form.year} onChange={handleChange} required />
+        <div className="form-group">
+          <label className="form-label">Год</label>
+          <input name="year" type="number" value={form.year} onChange={handleChange} required className="form-control" />
         </div>
 
-        <div>
-          <label>Группировать данные</label>
+        <div className="form-group">
+          <label className="form-label">Группировать данные</label>
           <input name="group_data" type="checkbox" checked={form.group_data} onChange={handleChange} />
         </div>
 
-        <div>
-          <label>Файл отчёта (.xlsx или .csv)</label>
-          <input type="file" accept=".xlsx,.csv" onChange={(e) => setFile(e.target.files[0])} required />
+        <div className="form-group">
+          <label className="form-label">Файл отчёта (.xlsx или .csv)</label>
+          <input type="file" accept=".xlsx,.csv" onChange={(e) => setFile(e.target.files[0])} required className="form-control" />
         </div>
 
-        <div>
-          <button type="submit">Отправить</button>
+        <div className="form-group">
+          <button type="submit" className="btn btn-primary" disabled={submitting}>{submitting ? 'Отправка...' : 'Отправить'}</button>
         </div>
       </form>
-      {message && <div style={{marginTop:10}}>{message}</div>}
+
+      {message && (
+        <div className={`alert-message ${message.includes('❌') ? 'error' : 'success'}`}>
+          {message}
+        </div>
+      )}
+
+      <TaskLogsPanel
+        activeTaskId={activeTaskId}
+        logs={logs}
+        onClose={() => { setActiveTaskId(null); setLogs([]); }}
+      />
     </div>
   );
 }

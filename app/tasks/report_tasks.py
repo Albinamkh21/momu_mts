@@ -2,6 +2,7 @@ import os
 import polars as pl
 from sqlalchemy import create_engine, text
 from core.celery_app import celery_app
+from celery import current_task
 from core.constants import RightCategory, FindingSource
 from .utils import clean_null_bytes
 from services.broadcaster import TaskProgress
@@ -62,11 +63,18 @@ def _match_by_name(match_type, partner_id, right_category_id, right_usage_type_i
         result = connection.execute(insert_sql, params)
         inserted = result.rowcount
     print(f"✅ Данные добавлены в staging_report_ids по {label}. Записей: {inserted}")
+    TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Данные добавлены в staging_report_ids по {label}. Записей: {inserted}")
+    
+    return inserted, inserted
+    TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Данные добавлены в staging_report_ids по {label}. Записей: {inserted}")
+    TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Данные добавлены в staging_report_ids по {label}. Записей: {inserted}")
+    TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Данные добавлены в staging_report_ids по {label}. Записей: {inserted}")
 
     with engine.begin() as connection:
         mark_result = connection.execute(mark_found_sql)
         marked = mark_result.rowcount
     print(f"✅ Помечено как найденные в staging_report_agg по {label}: {marked}")
+    TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Помечено как найденные в staging_report_agg по {label}: {marked}")
 
     return inserted, marked
 
@@ -95,6 +103,7 @@ def process_report_file(file_path: str):
         chunk_size = 50000
 
         print(f"РЕАЛЬНЫЕ ИМЕНА ИЗ EXCEL: {df.columns}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"РЕАЛЬНЫЕ ИМЕНА ИЗ EXCEL: {df.columns}")
 
 
         for i in range(0, total_rows, chunk_size):
@@ -105,10 +114,14 @@ def process_report_file(file_path: str):
             chunk = chunk.select(db_columns)
             
             print(f"DEBUG: Chunk shape: {chunk.shape}")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), f"DEBUG: Chunk shape: {chunk.shape}")
             print(f"DEBUG: Chunk columns: {chunk.columns}")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), f"DEBUG: Chunk columns: {chunk.columns}")
             print(f"DEBUG: Chunk dtypes: {chunk.dtypes}")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), f"DEBUG: Chunk dtypes: {chunk.dtypes}")
             if len(chunk) > 0:
                 print(f"DEBUG: First row: {chunk.row(0)}")
+                TaskProgress.emit(getattr(current_task.request, 'id', None), f"DEBUG: First row: {chunk.row(0)}")
             
             chunk = chunk.with_columns([
                 pl.col("*").cast(pl.Utf8).fill_null("")
@@ -117,11 +130,15 @@ def process_report_file(file_path: str):
             chunk = clean_null_bytes(chunk)
 
             print(f"DEBUG: After cleaning dtypes: {chunk.dtypes}")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), f"DEBUG: After cleaning dtypes: {chunk.dtypes}")
             if len(chunk) > 0:
                 print(f"DEBUG: First row after cleaning: {chunk.row(0)}")
+                TaskProgress.emit(getattr(current_task.request, 'id', None), f"DEBUG: First row after cleaning: {chunk.row(0)}")
 
             print(f"DEBUG: Column count: {len(chunk.columns)}")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), f"DEBUG: Column count: {len(chunk.columns)}")
             print(f"DEBUG: Shape: {chunk.shape}")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), f"DEBUG: Shape: {chunk.shape}")
             chunk.write_database(
                 table_name="staging_report",
                 connection=DATABASE_URL,
@@ -129,6 +146,7 @@ def process_report_file(file_path: str):
                 engine="adbc"
             )
             print(f"📦 Загружен батч отчёта: {i} - {i + len(chunk)}")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), f"📦 Загружен батч отчёта: {i} - {i + len(chunk)}")
 
         if os.path.exists(file_path):
             os.remove(file_path)
@@ -137,6 +155,7 @@ def process_report_file(file_path: str):
 
     except Exception as e:
         print(f"❌ Ошибка воркера (отчёт): {str(e)}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Ошибка воркера (отчёт): {str(e)}")
         return {"status": "error", "message": str(e)}
 
 
@@ -185,15 +204,18 @@ def update_catalog_dictionaries_from_report():
             persons_result = connection.execute(insert_persons_sql)
             persons_added = persons_result.rowcount
             print(f"✅ Добавлено персон: {persons_added}")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Добавлено персон: {persons_added}")
             
             result = connection.execute(sql_query)
             rows_affected = result.rowcount
             
         print(f"✅ Обновлены словари каталога. Добавлено записей в track_contribution: {rows_affected}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Обновлены словари каталога. Добавлено записей в track_contribution: {rows_affected}")
         return {"status": "success", "persons_added": persons_added, "track_contributions_added": rows_affected}
 
     except Exception as e:
         print(f"❌ Ошибка при обновлении словарей каталога: {str(e)}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Ошибка при обновлении словарей каталога: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 
@@ -221,6 +243,7 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
                 "year": year,
             })
             print(f"🗑️ Удалено старых записей из report: {delete_result.rowcount}")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), f"🗑️ Удалено старых записей из report: {delete_result.rowcount}")
 
         total_rows_affected = 0
 
@@ -236,6 +259,7 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
             """))
             connection.execute(text("TRUNCATE TABLE staging_report_ids;"))
         print("✅ Таблица staging_report_ids готова и очищена")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), "✅ Таблица staging_report_ids готова и очищена")
 
         # === Шаг 1: Поиск по ISRC ===
         insert_by_isrc_sql = text("""
@@ -254,6 +278,7 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
             total_rows_affected += rows_affected
 
         print(f"✅ Шаг 1: Найдено совпадений по ISRC: {rows_affected}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Шаг 1: Найдено совпадений по ISRC: {rows_affected}")
 
         # === Шаг 2: Пометка найденных по ISRC в staging_report_agg ===
         mark_found_sql = text("""
@@ -265,6 +290,7 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
         with engine.begin() as connection:
             mark_result = connection.execute(mark_found_sql)
             print(f"✅ Шаг 2: Помечено как найденные в staging_report_agg по ISRC: {mark_result.rowcount}")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Шаг 2: Помечено как найденные в staging_report_agg по ISRC: {mark_result.rowcount}")
 
         # === Шаг 3: Поиск по label_own_code ===
         insert_by_label_sql = text("""
@@ -283,11 +309,13 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
             total_rows_affected += rows_affected
 
         print(f"✅ Шаг 3: Найдено совпадений по label_own_code: {rows_affected}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Шаг 3: Найдено совпадений по label_own_code: {rows_affected}")
 
         # === Шаг 4: Пометка найденных по label_own_code в staging_report_agg ===
         with engine.begin() as connection:
             mark_result = connection.execute(mark_found_sql)
             print(f"✅ Шаг 4: Помечено как найденные в staging_report_agg по label_own_code: {mark_result.rowcount}")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Шаг 4: Помечено как найденные в staging_report_agg по label_own_code: {mark_result.rowcount}")
 
         # === Шаг 5: Поиск по track_name + authors (author/composer/lyricist) ===
         inserted, deleted = _match_by_name(RightCategory.AUTHOR, partner_id, right_category_id, right_usage_type_id, month, year)
@@ -345,6 +373,7 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
 
         rows_affected = total_rows_affected
         print(f"✅ Итого найдено совпадений в staging_report_ids: {total_rows_affected}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Итого найдено совпадений в staging_report_ids: {total_rows_affected}")
 
         # === Финальный шаг: перенос данных из staging_report_ids в report ===
         final_insert_sql = text("""
@@ -384,6 +413,7 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
             })
             rows_affected = result.rowcount
         print(f"✅ Данные перенесены в report из staging_report_ids. Записей: {rows_affected}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Данные перенесены в report из staging_report_ids. Записей: {rows_affected}")
 
         # Экспорт данных в Excel
         export_result = export_report_to_excel(partner_id, right_category_id, right_usage_type_id, month, year)
@@ -399,6 +429,7 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
 
     except Exception as e:
         print(f"❌ Ошибка при переносе данных в report: {str(e)}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Ошибка при переносе данных в report: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 
@@ -410,6 +441,7 @@ def export_report_to_excel(partner_id: int, right_category_id: int, right_usage_
     """
     try:
         print("📤 Начинаем экспорт отчёта в Excel...")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), "📤 Начинаем экспорт отчёта в Excel...")
         base_query = text("""
         SELECT DISTINCT ON (s.row_number, s.id)
             s.id AS staging_id,
@@ -575,7 +607,9 @@ def export_report_to_excel(partner_id: int, right_category_id: int, right_usage_
         df.write_excel(output_path)
 
         print(f"✅ Отчёт экспортирован в файл: {output_path}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Отчёт экспортирован в файл: {output_path}")
         print(f"📊 Всего строк в файле: {len(df)}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"📊 Всего строк в файле: {len(df)}")
 
         return {
             "status": "success",
@@ -585,6 +619,7 @@ def export_report_to_excel(partner_id: int, right_category_id: int, right_usage_
 
     except Exception as e:
         print(f"❌ Ошибка при экспорте отчёта в Excel: {str(e)}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Ошибка при экспорте отчёта в Excel: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 
@@ -599,39 +634,49 @@ def process_full_report_pipeline(file_path: str, partner_id: int, right_category
     # === Шаг 0: Очистка staging таблиц ===
     try:
         print("🧹 Шаг 0: Очистка staging_report и staging_report_agg...")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), "🧹 Шаг 0: Очистка staging_report и staging_report_agg...")
         with engine.begin() as connection:
             connection.execute(text("TRUNCATE TABLE staging_report;"))
             #connection.execute(text("CREATE TABLE IF NOT EXISTS staging_report_agg (id BIGSERIAL PRIMARY KEY, label_own_code TEXT, isrc TEXT, track_name TEXT, artist_name TEXT, authors TEXT, play_count BIGINT DEFAULT 0, payout_amount NUMERIC(20,8) DEFAULT 0.0, price_per_play NUMERIC(20,8) DEFAULT 0.0);"))
             connection.execute(text("TRUNCATE TABLE staging_report_agg;"))
         print("✅ Шаг 0 завершён: staging таблицы очищены")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), "✅ Шаг 0 завершён: staging таблицы очищены")
         steps_completed.append("clean_staging")
     except Exception as e:
         print(f"❌ Шаг 0 (очистка staging): {e}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Шаг 0 (очистка staging): {e}")
         return {"status": "error", "step": "clean_staging", "message": str(e), "steps_completed": steps_completed}
 
     # === Шаг 1: Загрузка и парсинг файла ===
     print("📥 Шаг 1: Загрузка и парсинг файла (process_report_file)...")
+    TaskProgress.emit(getattr(current_task.request, 'id', None), "📥 Шаг 1: Загрузка и парсинг файла (process_report_file)...")
     result = process_report_file(file_path)
     if result.get("status") != "success":
         print(f"❌ Шаг 1 (process_report_file) завершился с ошибкой: {result.get('message')}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Шаг 1 (process_report_file) завершился с ошибкой: {result.get('message')}")
         return {"status": "error", "step": "process_report_file", "message": result.get("message"), "steps_completed": steps_completed}
     print(f"✅ Шаг 1 завершён: process_report_file — загружено строк: {result.get('total_rows')}")
+    TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Шаг 1 завершён: process_report_file — загружено строк: {result.get('total_rows')}")
     steps_completed.append("process_report_file")
 
 
 
     # === Шаг 3: Группировка данных ===
     print(f"📊 Шаг 3: Группировка данных (group_report_data, group_data={group_data})...")
+    TaskProgress.emit(getattr(current_task.request, 'id', None), f"📊 Шаг 3: Группировка данных (group_report_data, group_data={group_data})...")
     result = group_report_data(group_data)
     if result.get("status") != "success":
         print(f"❌ Шаг 3 (group_report_data) завершился с ошибкой: {result.get('message')}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Шаг 3 (group_report_data) завершился с ошибкой: {result.get('message')}")
         return {"status": "error", "step": "group_report_data", "message": result.get("message"), "steps_completed": steps_completed}
     print(f"✅ Шаг 3 завершён: group_report_data — агрегировано: {result.get('rows_aggregated')}, экспортировано: {result.get('rows_exported')}")
+    TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Шаг 3 завершён: group_report_data — агрегировано: {result.get('rows_aggregated')}, экспортировано: {result.get('rows_exported')}")
     steps_completed.append("group_report_data")
 
     # === Шаг 4: Проверка sum(payout_amount) ===
     try:
         print("🔍 Шаг 4: Проверка sum(payout_amount) staging_report == staging_report_agg...")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), "🔍 Шаг 4: Проверка sum(payout_amount) staging_report == staging_report_agg...")
         with engine.connect() as connection:
             row = connection.execute(text("""
                 SELECT
@@ -643,23 +688,30 @@ def process_full_report_pipeline(file_path: str, partner_id: int, right_category
         if sum_staging != sum_agg:
             msg = f"Суммы payout_amount не совпадают: staging_report={sum_staging}, staging_report_agg={sum_agg}"
             print(f"❌ Шаг 4: {msg}")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Шаг 4: {msg}")
             return {"status": "error", "step": "verify_payout_amount", "message": msg, "steps_completed": steps_completed, "sum_staging": str(sum_staging), "sum_agg": str(sum_agg)}
         print(f"✅ Шаг 4 завершён: суммы совпадают ({sum_staging})")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Шаг 4 завершён: суммы совпадают ({sum_staging})")
         steps_completed.append("verify_payout_amount")
     except Exception as e:
         print(f"❌ Шаг 4 (проверка payout_amount): {e}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Шаг 4 (проверка payout_amount): {e}")
         return {"status": "error", "step": "verify_payout_amount", "message": str(e), "steps_completed": steps_completed}
 
     # === Шаг 5: Перенос данных в итоговую таблицу report ===
     print("📝 Шаг 5: Перенос данных в итоговую таблицу (insert_data_into_final_report_table)...")
+    TaskProgress.emit(getattr(current_task.request, 'id', None), "📝 Шаг 5: Перенос данных в итоговую таблицу (insert_data_into_final_report_table)...")
     result = insert_data_into_final_report_table(partner_id, right_category_id, right_usage_type_id, month, year)
     if result.get("status") != "success":
         print(f"❌ Шаг 5 (insert_data_into_final_report_table) завершился с ошибкой: {result.get('message')}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Шаг 5 (insert_data_into_final_report_table) завершился с ошибкой: {result.get('message')}")
         return {"status": "error", "step": "insert_data_into_final_report_table", "message": result.get("message"), "steps_completed": steps_completed}
     print(f"✅ Шаг 5 завершён: insert_data_into_final_report_table — записей: {result.get('report_records_added')}, экспортировано: {result.get('rows_exported')}")
+    TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Шаг 5 завершён: insert_data_into_final_report_table — записей: {result.get('report_records_added')}, экспортировано: {result.get('rows_exported')}")
     steps_completed.append("insert_data_into_final_report_table")
 
     print("🎉 Пайплайн завершён успешно!")
+    TaskProgress.emit(getattr(current_task.request, 'id', None), "🎉 Пайплайн завершён успешно!")
     return {
         "status": "success",
         "steps_completed": steps_completed,
@@ -678,6 +730,7 @@ def group_report_data(group_data: bool = True):
     try:
         with engine.begin() as connection:
             print(f"📋 Начинаем {'группировку' if group_data else 'перенос без группировки'} данных отчёта...")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), f"📋 Начинаем {'группировку' if group_data else 'перенос без группировки'} данных отчёта...")
             
             create_table_sql = text("""
             CREATE TABLE IF NOT EXISTS staging_report_agg (
@@ -698,10 +751,12 @@ def group_report_data(group_data: bool = True):
             """)
             connection.execute(create_table_sql)
             print("✅ Таблица staging_report_agg готова")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), "✅ Таблица staging_report_agg готова")
             
             truncate_sql = text("TRUNCATE TABLE staging_report_agg;")
             connection.execute(truncate_sql)
             print("✅ Таблица staging_report_agg очищена")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), "✅ Таблица staging_report_agg очищена")
 
             if group_data:
                 insert_agg_sql = text("""
@@ -763,6 +818,7 @@ def group_report_data(group_data: bool = True):
             result = connection.execute(insert_agg_sql)
             rows_inserted = result.rowcount
             print(f"✅ Агрегировано и вставлено записей: {rows_inserted}")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Агрегировано и вставлено записей: {rows_inserted}")
 
 
             
@@ -770,6 +826,7 @@ def group_report_data(group_data: bool = True):
 
         
         print("📤 Начинаем экспорт в Excel...")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), "📤 Начинаем экспорт в Excel...")
         export_query = """
             SELECT 
                 label_own_code,
@@ -799,7 +856,9 @@ def group_report_data(group_data: bool = True):
             df.write_excel(output_path)
             
         print(f"✅ Данные экспортированы в файл: {output_path}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Данные экспортированы в файл: {output_path}")
         print(f"📊 Всего строк в файле: {len(df)}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"📊 Всего строк в файле: {len(df)}")
         
         return {
             "status": "success", 
@@ -810,6 +869,7 @@ def group_report_data(group_data: bool = True):
 
     except Exception as e:
         print(f"❌ Ошибка при группировке данных отчёта: {str(e)}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Ошибка при группировке данных отчёта: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 
@@ -838,6 +898,7 @@ def find_lost_track():
             )
 
         print(f"🔍 Найдено потерянных треков: {len(df)}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"🔍 Найдено потерянных треков: {len(df)}")
 
         storage_dir = "/app/storage"
         os.makedirs(storage_dir, exist_ok=True)
@@ -845,7 +906,7 @@ def find_lost_track():
         df.write_excel(output_path)
 
         print(f"✅ Данные экспортированы в файл: {output_path}")
-        TaskProgress.emit(1, f"✅ Данные экспортированы в файл: {output_path}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Данные экспортированы в файл: {output_path}")
 
         return {
             "status": "success",
@@ -855,7 +916,7 @@ def find_lost_track():
 
     except Exception as e:
         print(f"❌ Ошибка при поиске потерянных треков: {str(e)}")
-        TaskProgress.emit(1, f"❌ Ошибка при поиске потерянных треков: {str(e)}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Ошибка при поиске потерянных треков: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 
@@ -959,7 +1020,7 @@ def normalize_data(table_name: str = "person", column_name: str = "full_name", c
         tokens_col = f"{column_name}_tokens"
         norm_key_col = f"{column_name}_norm_key"
 
-        chunk_size = 5000
+        chunk_size = 50000
         total_updated = 0
         last_id = 0
 
@@ -976,6 +1037,7 @@ def normalize_data(table_name: str = "person", column_name: str = "full_name", c
             f"ORDER BY id LIMIT :chunk_size;"
         )
         print(f"📦 выбираем {select_sql} ")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"📦 выбираем {select_sql} ")
 
         while True:
             # use provided connection if exists, otherwise open a new one
@@ -1016,12 +1078,15 @@ def normalize_data(table_name: str = "person", column_name: str = "full_name", c
             last_id = rows[-1].id
             total_updated += len(updates)
             print(f"📦 Обновлено {total_updated} (last_id={last_id})")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), f"📦 Обновлено {total_updated} (last_id={last_id})")
 
         print(f"✅ Нормализация {table_name}.{column_name} завершена. Обновлено записей: {total_updated}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Нормализация {table_name}.{column_name} завершена. Обновлено записей: {total_updated}")
         return {"status": "success", "total_updated": total_updated}
 
     except Exception as e:
         print(f"❌ Ошибка при нормализации {table_name}.{column_name}: {str(e)}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Ошибка при нормализации {table_name}.{column_name}: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 
@@ -1046,6 +1111,7 @@ def normalize_staging_report_agg():
             )).fetchall()
 
         print(f"📋 staging_report_agg: строк для нормализации: {len(rows)}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"📋 staging_report_agg: строк для нормализации: {len(rows)}")
 
         updates = []
         for row in rows:
@@ -1103,12 +1169,15 @@ def normalize_staging_report_agg():
                 conn.execute(update_sql, batch)
             total_updated += len(batch)
             print(f"📦 Обновлено {total_updated} / {len(updates)}")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), f"📦 Обновлено {total_updated} / {len(updates)}")
 
         print(f"✅ Нормализация staging_report_agg завершена. Обновлено: {total_updated}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Нормализация staging_report_agg завершена. Обновлено: {total_updated}")
         return {"status": "success", "total_updated": total_updated}
 
     except Exception as e:
         print(f"❌ Ошибка при нормализации staging_report_agg: {str(e)}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Ошибка при нормализации staging_report_agg: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 
@@ -1186,6 +1255,7 @@ def _match_by_normalized_name(match_type, partner_id, right_category_id, right_u
 
 
 
+    TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Данные добавлены в staging_report_ids по {label}. Записей: {inserted}")
     return inserted, inserted
 
 @celery_app.task(name="normalize_person_data")
@@ -1206,7 +1276,7 @@ def normalize_person_data(table_name="person", column_name="full_name",
         if not _re_val.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', norm_key_col):
             return {"status": "error", "message": f"Invalid norm_key_col: {norm_key_col}"}
 
-        chunk_size = 5000
+        chunk_size = 50000
         total_updated = 0
         last_id = 0
 
@@ -1262,10 +1332,13 @@ def normalize_person_data(table_name="person", column_name="full_name",
             last_id = rows[-1].id
             total_updated += len(updates)
             print(f"📦 Обновлено {total_updated} (last_id={last_id})")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), f"📦 Обновлено {total_updated} (last_id={last_id})")
 
         print(f"✅ Нормализация {table_name}.{column_name} завершена. Обновлено записей: {total_updated}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Нормализация {table_name}.{column_name} завершена. Обновлено записей: {total_updated}")
         return {"status": "success", "total_updated": total_updated}
 
     except Exception as e:
         print(f"❌ Ошибка при нормализации {table_name}.{column_name}: {str(e)}")
-        return {"status": "error", "message": str(e)}    
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Ошибка при нормализации {table_name}.{column_name}: {str(e)}")
+        return {"status": "error", "message": str(e)}
