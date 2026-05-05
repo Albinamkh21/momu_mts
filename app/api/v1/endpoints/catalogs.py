@@ -5,13 +5,13 @@ from uuid import uuid4
 from celery import chain
 from tasks.catalog_tasks import process_catalog_file,  check_catalog_integrity, export_normalized_catalog_to_flat, delete_data_from_all_dictionaries_by_label
 from tasks.catalog_tasks_v2 import  sync_catalog_dictionaries 
-from tasks.report_tasks import update_catalog_dictionaries_from_report
 from pydantic import BaseModel
 router = APIRouter()
 
 STORAGE_DIR = "/app/storage"
 class DownloadRequest(BaseModel):
     label_id: int | None = None
+    right_usage_type_id: int | None = None
 
 @router.post("/upload")
 async def upload_catalog(file: UploadFile = File(...)):
@@ -76,12 +76,17 @@ async def check_upload_catalog():
 @router.post("/download")
 async def download_catalog(request: DownloadRequest):
     # Передаём директорию назначения; имя файла генерируется автоматически в задаче
-    task_result = export_normalized_catalog_to_flat.delay("/app/storage", request.label_id)
+    task_result = export_normalized_catalog_to_flat.delay(
+        "/app/storage",
+        request.label_id,
+        request.right_usage_type_id,
+    )
 
     return {
         "message": "Запущен процесс экспорта каталога",
         "task_id": task_result.id,
-        "label_id": request.label_id
+        "label_id": request.label_id,
+        "right_usage_type_id": request.right_usage_type_id,
     }
 
 

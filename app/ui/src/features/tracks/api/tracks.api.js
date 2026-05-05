@@ -1,12 +1,13 @@
 import { httpClient } from '../../../api/httpClient';
 
 export const getTracks = async (params) => {
-  const { data } = await httpClient.get('/tracks', { params });
-  return data;
+  const response = await httpClient.get('/tracks', { params });
+  return response;
 };
 
 export const getTrackDetail = async (id) => {
   const { data } = await httpClient.get(`/tracks/${id}`);
+  
   return data;
 };
 

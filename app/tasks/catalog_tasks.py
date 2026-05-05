@@ -341,13 +341,24 @@ from sqlalchemy import text
 # Убедись, что импортируешь engine, TaskProgress, celery_app и т.д.
 
 @celery_app.task(name="export_normalized_catalog_to_flat", bind=True)
-def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: int = None):
+def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: int = None, right_usage_type_id: int = None):
     task_id = self.request.id
-    TaskProgress.emit(task_id, f"✅ Начало выгрузки каталога. Фильтр по label_id: {label_id}")
-    print(f"DEBUG: Task started task_id={task_id}, label_id={label_id}, type={type(label_id)}")
+    TaskProgress.emit(task_id, f"✅ Начало выгрузки каталога. Фильтр по label_id: {label_id}, right_usage_type_id: {right_usage_type_id}")
+    print(f"DEBUG: Task started task_id={task_id}, label_id={label_id}, right_usage_type_id={right_usage_type_id}")
 
     # Условие фильтрации. Убрали LIMIT, чтобы выгружался весь объем
-    where_clause = "WHERE label_id = :label_id" if label_id else ""
+    where_parts = []
+    params = {}
+    if label_id:
+        where_parts.append("label_id = :label_id")
+        params["label_id"] = label_id
+
+    # Если передан right_usage_type_id — фильтруем по трекам, у которых есть запись в track_right
+    if right_usage_type_id:
+        where_parts.append("track_id IN (SELECT track_id FROM track_right WHERE right_usage_type_id = :rut_id and share_percentage > 0) ")
+        params["rut_id"] = right_usage_type_id
+
+    where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
     
     # Максимально простой и быстрый запрос к материализованному представлению
     query = f"""
@@ -374,10 +385,10 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
         CHUNK_SIZE = 10000  # Выгружаем и пишем блоками по 10 тыс. строк
 
         with engine.connect() as conn:
-            # Настройка параметров запроса
-            params = {"label_id": label_id} if label_id else {}
+                    # Настройка параметров запроса
+                    # params сформированы выше
             
-            # Включаем stream_results, чтобы база не выплевывала миллион строк в память разом
+                    # Включаем stream_results, чтобы база не выплевывала миллион строк в память разом
             result = conn.execution_options(stream_results=True).execute(text(query), params)
             
             # Открываем файл для потоковой записи
@@ -406,10 +417,15 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
         # Если цикл прошел, а строк 0
         if total_rows == 0:
             TaskProgress.emit(task_id, "❌ Нет данных для выгрузки (0 строк).", level="error")
+            import time
+            time.sleep(1.0)
+            
             # Удаляем пустой файл, чтобы не засорять диск
             if os.path.exists(full_path):
                 os.remove(full_path)
-            return {"status": "error", "message": "Нет данных для выгрузки"}
+                
+            TaskProgress.emit(task_id, "❌ Нет данных для выгрузки (0 строк).")
+            return {"status": "success", "message": "Нет данных для выгрузки"}
 
         # Успешное завершение
         TaskProgress.emit(task_id, f"✅ Файл успешно сохранен: {full_path}. Всего строк: {total_rows}")

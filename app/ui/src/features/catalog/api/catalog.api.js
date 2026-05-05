@@ -13,11 +13,19 @@ export const uploadCatalogV2 = async (file, user_id) => {
 
 // Download catalog
 export const downloadCatalog = async (label_id) => {
-  const payload = label_id ? { label_id: parseInt(label_id) } : {}; 
-    
-   console.log("DEBUG: downloadCatalog called with label_id:", label_id, "payload:", payload);
-    const { data } = await httpClient.post('/v1/catalog/download', payload);
-    return data;
+  const payload = label_id ? { label_id: parseInt(label_id) } : {};
+  console.log("DEBUG: downloadCatalog called with label_id:", label_id, "payload:", payload);
+  const { data } = await httpClient.post('/v1/catalog/download', payload);
+  return data;
+};
+
+export const downloadCatalogWithUsage = async (label_id, right_usage_type_id) => {
+  const payload = {};
+  if (label_id) payload.label_id = parseInt(label_id);
+  if (right_usage_type_id) payload.right_usage_type_id = parseInt(right_usage_type_id);
+  console.log("DEBUG: downloadCatalogWithUsage payload:", payload);
+  const { data } = await httpClient.post('/v1/catalog/download', payload);
+  return data;
 };
 
 // Delete label data
@@ -28,5 +36,10 @@ export const deleteLabelData = async (label_id) => {
 
 export const getLabels = async () => {
   const { data } = await httpClient.get('/labels');
+  return data;
+};
+
+export const getRightUsageTypes = async () => {
+  const { data } = await httpClient.get('/v1/report/right_usage_types');
   return data;
 };

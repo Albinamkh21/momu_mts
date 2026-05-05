@@ -7,7 +7,7 @@ from celery import chain
 from sqlalchemy import text
 from core.database import sync_engine
 from tasks.report_tasks import (
-    process_report_file, update_catalog_dictionaries_from_report,
+    process_report_file,
     insert_data_into_final_report_table, group_report_data, find_lost_track,
     process_full_report_pipeline, normalize_person_data, normalize_staging_report_agg, normalize_data,
     export_report_to_excel
@@ -216,7 +216,7 @@ async def get_report_data_endpoint(
     Полный пайплайн обработки отчёта:
     1. Очистка staging_report и staging_report_agg
     2. Загрузка файла и парсинг (process_report_file)
-    3. Обновление словарей каталога (update_catalog_dictionaries_from_report)
+   
     4. Группировка данных (group_report_data)
     5. Проверка sum(payout_amount) staging_report == staging_report_agg
     6. Перенос в итоговую таблицу report (insert_data_into_final_report_table)

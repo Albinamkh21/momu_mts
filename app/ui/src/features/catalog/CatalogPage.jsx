@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { uploadCatalogV2, downloadCatalog, deleteLabelData, getLabels } from './api/catalog.api';
+import { uploadCatalogV2, downloadCatalogWithUsage, deleteLabelData, getLabels, getRightUsageTypes } from './api/catalog.api';
 import { useTaskLogs } from '../../hooks/useTaskLogs';
 import TaskLogsPanel from '../../components/TaskLogsPanel';
 
@@ -9,8 +9,10 @@ export function CatalogPage() {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [labelId, setLabelId] = useState('');
   const [labels, setLabels] = useState([]);
+  const [usageTypes, setUsageTypes] = useState([]);
   const [users, setUsers] = useState([]);
   const [userId, setUserId] = useState('');
+  const [rightUsageTypeId, setRightUsageTypeId] = useState('');
   const [message, setMessage] = useState('');
   const fileInputRef = useRef();
   const [activeTaskId, setActiveTaskId] = useState(null);
@@ -19,6 +21,7 @@ export function CatalogPage() {
 
   useEffect(() => {
     getLabels().then(setLabels).catch(() => setLabels([]));
+    getRightUsageTypes().then(setUsageTypes).catch(() => setUsageTypes([]));
     fetch('/api/v1/users').then(r => r.json()).then(setUsers).catch(() => setUsers([]));
   }, []);
 
@@ -65,7 +68,7 @@ export function CatalogPage() {
     setActiveTaskId(null);
 
     try {
-      const res = await downloadCatalog(labelId);
+      const res = await downloadCatalogWithUsage(labelId, rightUsageTypeId);
       if (res.task_id) {
         setActiveTaskId(res.task_id);
         setMessage('⚙️ Файл формируется. Логи ниже...');
@@ -165,6 +168,11 @@ export function CatalogPage() {
           <select value={labelId} onChange={e => setLabelId(e.target.value)} className="form-control">
             <option value="">Все доступные лейблы</option>
             {labels.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
+          <label className="form-label">Тип использования:</label>
+          <select value={rightUsageTypeId} onChange={e => setRightUsageTypeId(e.target.value)} className="form-control">
+            <option value="">Все типы</option>
+            {usageTypes.map(u => <option key={u.id} value={u.id}>{u.label || u.code}</option>)}
           </select>
           <button type="submit" disabled={downloadLoading} className="btn btn-primary">
             {downloadLoading ? 'Сборка...' : 'Скачать Excel'}

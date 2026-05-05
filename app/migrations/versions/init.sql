@@ -220,6 +220,7 @@ INSERT INTO right_category (name) values ('Author'), ('Related');
 
 
     CREATE TABLE staging_report (
+        upload_id TEXT,
         row_number TEXT,
         label_own_code TEXT,
         isrc TEXT,
@@ -239,6 +240,17 @@ INSERT INTO right_category (name) values ('Author'), ('Related');
 
 CREATE INDEX idx_stg_report_isrc ON staging_report(isrc);
 CREATE INDEX idx_stg_report_label_own_code ON staging_report(label_own_code);
+
+   CREATE TABLE IF NOT EXISTS staging_report_ids (
+                    id BIGSERIAL PRIMARY KEY,
+                    staging_id BIGINT NOT NULL,
+                    track_id BIGINT NOT NULL,
+                    finding_source INT,
+                    upload_id TEXT
+                );
+
+
+
 
 CREATE TABLE partners (
     id SERIAL PRIMARY KEY,
@@ -484,7 +496,8 @@ CREATE INDEX IF NOT EXISTS idx_person_tokens_gin ON person USING gin (tokens);
                 artist_name_tokens TEXT[],        
                 artist_name_norm_key_full TEXT,
                 authors_tokens TEXT[],
-                authors_norm_key_full TEXT
+                authors_norm_key_full TEXT, 
+                upload_id TEXT
             );
 
 
@@ -518,3 +531,12 @@ VALUES (
     'a.muhamedieva@dyn-it.de', 
     'hash_placeholder_тут_будет_реальный_хеш'
 );
+
+
+ALTER TABLE staging_cataloog
+   
+    ADD COLUMN track_name_norm_key TEXT,
+    ADD COLUMN track_name_tokens TEXT[];
+ 
+
+track_name_norm_key

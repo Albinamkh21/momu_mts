@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useTracks } from './hooks/useTracks';
 import { TrackGrid } from './components/TrackGrid';
 import { FiltersPanel } from './components/FiltersPanel';
@@ -19,24 +19,19 @@ const getInitialFilters = () => {
 };
 
 export const TracksPage = ({ onTrackClick }) => {
-  const { data, loading, labels, refetch } = useTracks();
+  const { loading, labels, fetchTracksData } = useTracks();
   const [selectedPerson, setSelectedPerson] = useState(null);
   const [filters, setFilters] = useState(getInitialFilters);
-
-  // При монтировании загружаем с сохранёнными фильтрами
-  useEffect(() => {
-    refetch(filters);
-  }, []); // пустой массив – только один раз при монтировании
+  const [searchTrigger, setSearchTrigger] = useState(0);
 
   const handleSearch = () => {
     if (!loading) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(filters));
-      refetch(filters);
+      // Просто увеличиваем счетчик, чтобы TrackGrid понял, что нужно обновить данные
+      setSearchTrigger(prev => prev + 1);
     }
   };
 
-  // При изменении фильтров (без поиска) можно тоже сохранять, но по логике сохраняем только после нажатия "Найти"
-  // Однако для согласованности можно обновлять localStorage при каждом изменении:
   const handleFiltersChange = (newFilters) => {
     setFilters(newFilters);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(newFilters));
@@ -53,15 +48,25 @@ export const TracksPage = ({ onTrackClick }) => {
       />
 
       <div className="grid-wrapper">
+        {/* Анимация загрузки сохранена */}
         {loading && (
           <div className="loading-overlay">
             <div className="loading-spinner" />
             <span className="loading-text">Загружаем треки...</span>
           </div>
         )}
-        <TrackGrid rowData={data} onPersonClick={setSelectedPerson} onTrackClick={onTrackClick} />
+        
+        {/* Грид теперь работает в режиме Infinite */}
+        <TrackGrid 
+          fetchTracks={fetchTracksData} 
+          filters={filters}
+          searchTrigger={searchTrigger}
+          onPersonClick={setSelectedPerson} 
+          onTrackClick={onTrackClick} 
+        />
       </div>
 
+      {/* Сайдбар Person сохранен полностью */}
       {selectedPerson && (
         <div className="person-sidebar">
           <h3>{selectedPerson.name}</h3>

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, Path, HTTPException
+from fastapi import APIRouter, Depends, Query, Path, HTTPException, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from typing import Optional
@@ -41,11 +41,13 @@ def get_tracks(
     author_name: Optional[str] = Query(None, description="Поиск по авторам "),
 
     limit: int = Query(100, le=500),
+    offset: int = Query(0, ge=0, description="Сколько записей пропустить"),
     db: Session = Depends(get_db),
+    response: Response = None,
 ):
    
     conditions = []
-    params = {"lim": limit}
+    params = {"lim": limit, "off": offset}
 
     if query:
         conditions.append("(t.title ILIKE :q OR t.isrc ILIKE :q)")
@@ -95,13 +97,28 @@ def get_tracks(
         params["author_name"] = f"%{author_name}%"    
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    # Общее количество записей по условиям (до LIMIT/OFFSET)
+    total_row = db.execute(
+        text(f"""
+            SELECT COUNT(*) AS cnt
+            FROM track t
+            {where}
+        """),
+        params,
+    ).fetchone()
+
+    total = int(total_row.cnt) if total_row is not None else 0
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
+
     tracks_rows = db.execute(
         text(f"""
             SELECT t.id, t.isrc, t.label_own_code, t.title
             FROM track t
             {where}
             ORDER BY t.id
-            LIMIT :lim
+            LIMIT :lim OFFSET :off
         """),
         params,
     ).fetchall()
