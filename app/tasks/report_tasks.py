@@ -415,10 +415,10 @@ def export_report_to_excel(partner_id: int, right_category_id: int, right_usage_
             s.price_per_play AS "Цена за прослушивание",
             fs.code AS "Источник совпадения"
         FROM staging_report_agg s
-        LEFT JOIN staging_report_ids si ON si.staging_id = s.id
+        LEFT JOIN staging_report_ids si ON si.staging_id = s.id and s.upload_id = :uid  AND si.upload_id = :uid
         LEFT JOIN track t ON t.id = si.track_id
         LEFT JOIN finding_source fs ON fs.id = si.finding_source
-        WHERE s.upload_id = :uid  AND si.upload_id = :uid
+       
         ORDER BY s.row_number ASC, s.id;
         """)
 
@@ -684,8 +684,8 @@ def process_full_report_pipeline(file_path: str, partner_id: int, right_category
     finally:
   
         print(f"🧹 Финальная очистка staging-таблиц для сессии {upload_id}...")
-        with engine.begin() as connection:
-            _cleanup_staging_report_tables(connection, upload_id)
+        #with engine.begin() as connection:
+            #_cleanup_staging_report_tables(connection, upload_id)
         print("✅ Staging-таблицы очищены")    
 
 
