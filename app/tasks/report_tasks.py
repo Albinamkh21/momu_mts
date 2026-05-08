@@ -37,7 +37,7 @@ def _match_by_name(match_type, partner_id, right_category_id, right_usage_type_i
 
     insert_sql = text(f"""
         INSERT INTO staging_report_ids (staging_id, track_id, finding_source, upload_id)
-        SELECT s.id, t.id, :finding_source, :uid
+        SELECT distinct s.id, t.id, :finding_source, :uid
         FROM staging_report_agg s
         JOIN track t ON t.title = s.track_name
         WHERE  s.{staging_col} IS NOT NULL AND s.{staging_col} != '' and upload_id = :uid
@@ -198,7 +198,7 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
         # === Шаг 1: Поиск по ISRC ===
         insert_by_isrc_sql = text("""
             INSERT INTO staging_report_ids (staging_id, track_id, finding_source, upload_id)
-            SELECT s.id, t.id, :finding_source, :uid
+            SELECT distinct s.id, t.id, :finding_source, :uid
             FROM staging_report_agg s
             JOIN track t ON s.isrc = t.isrc
             WHERE s.isrc IS NOT NULL AND s.isfound = FALSE AND s.upload_id = :uid;
@@ -231,7 +231,7 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
         # === Шаг 3: Поиск по label_own_code ===
         insert_by_label_sql = text("""
             INSERT INTO staging_report_ids (staging_id, track_id, finding_source, upload_id)
-            SELECT s.id, t.id, :finding_source, :uid
+            SELECT  DISTINCT s.id, t.id, :finding_source, :uid
             FROM staging_report_agg s
             JOIN track t ON s.label_own_code = t.label_own_code
             WHERE s.label_own_code IS NOT NULL AND s.isfound = FALSE and s.upload_id = :uid;
@@ -461,13 +461,13 @@ def export_report_to_excel(partner_id: int, right_category_id: int, right_usage_
         with engine.connect() as conn:
             # Выполняем запросы с параметрами и конвертируем в Polars
             result = conn.execute(base_query, {"uid": upload_id})
-            df_base = pl.DataFrame(result.fetchall(), schema=result.keys())
+            df_base = pl.DataFrame(result.fetchall(), schema=result.keys(), infer_schema_length=None)
             
             result = conn.execute(rights_query, {"uid": upload_id})
-            df_rights = pl.DataFrame(result.fetchall(), schema=result.keys())
+            df_rights = pl.DataFrame(result.fetchall(), schema=result.keys(), infer_schema_length=None)
             
             result = conn.execute(extended_rights_query, {"uid": upload_id})
-            df_ext = pl.DataFrame(result.fetchall(), schema=result.keys())
+            df_ext = pl.DataFrame(result.fetchall(), schema=result.keys(), infer_schema_length=None)
 
 
 
@@ -684,8 +684,8 @@ def process_full_report_pipeline(file_path: str, partner_id: int, right_category
     finally:
   
         print(f"🧹 Финальная очистка staging-таблиц для сессии {upload_id}...")
-        #with engine.begin() as connection:
-            #_cleanup_staging_report_tables(connection, upload_id)
+        with engine.begin() as connection:
+            _cleanup_staging_report_tables(connection, upload_id)
         print("✅ Staging-таблицы очищены")    
 
 
