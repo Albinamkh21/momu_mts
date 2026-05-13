@@ -1,6 +1,5 @@
 import os
 import polars as pl
-import pandas as pd
 from sqlalchemy import create_engine, text
 from core.celery_app import celery_app
 from celery import current_task
@@ -1680,11 +1679,11 @@ def export_report_to_excel_total(
             .drop_nulls()
             .to_list()
         )
-        #df_parts = df_base.partition_by("right_holder_name", as_dict=True)
+        df_parts = df_base.drop("track_id").partition_by("right_holder_name", as_dict=True)
         
         with xlsxwriter.Workbook(output_path) as workbook:
             # Общий лист "Все данные" (без колонки right_holder_name)
-            df_all = df_base.drop(["right_holder_name"])
+            df_all = df_base.drop(["right_holder_name", "track_id"])
             df_all.write_excel(workbook, worksheet="Все данные")
 
             # Листы по каждому правообладателю
