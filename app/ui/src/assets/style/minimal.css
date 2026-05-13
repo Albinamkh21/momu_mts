@@ -211,3 +211,34 @@
   color: white;
   border-left-color: var(--active-color);
 }
+
+/* --- Multiselect для лейблов --- */
+
+select[multiple] {
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-input);
+  font-size: 14px;
+  flex: 1;
+  min-width: 200px;
+  transition: border-color 0.2s;
+  min-height: 120px;
+}
+
+select[multiple]:focus {
+  outline: none;
+  border-color: var(--active-color);
+  background: white;
+}
+
+select[multiple] option {
+  padding: 8px 4px;
+  background: white;
+  color: var(--text-main);
+}
+
+select[multiple] option:checked {
+  background: var(--active-color);
+  color: white;
+}

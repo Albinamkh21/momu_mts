@@ -1,0 +1,10 @@
+.venv
+venv
+__pycache__
+.git
+node_modules
+*.db
+*.sqlite3
+app/ui/node_modules
+app/storage
+backups

@@ -441,7 +441,7 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
 def delete_data_from_all_dictionaries_by_label(self, label_id: int):
     """
     Удаляет все данные о треках, связях и правах, привязанных к указанному лейблу.
-    Базовые справочники (label, person, right_holder, right_category,
+    Базовые справочники (label,  right_category,
     right_usage_type, finding_source, partners, contract) остаются нетронутыми.
     """
     try:
@@ -557,6 +557,13 @@ def delete_data_from_all_dictionaries_by_label(self, label_id: int):
                 "persons": r_persons.rowcount
 
             }
+
+
+            #обновляем материализованное представление, чтобы не было рассинхрона
+            conn.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_catalog_flat; mv_catalog_flat"))
+            conn.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_track_extended; "))
+            print(f"🏁 Представления обновлены.")
+
 
             print(f"🏁 Удаление по лейблу {label_id} завершено: {stats}")
             TaskProgress.emit(task_id, f"🏁 Удаление по лейблу {label_id} завершено: {stats}")

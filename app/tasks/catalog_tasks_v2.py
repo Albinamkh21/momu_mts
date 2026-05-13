@@ -708,6 +708,10 @@ def sync_catalog_dictionaries(self, prev_result, version="v2"):
 
             #_sync_track_labels_v2(conn, upload_id, staging_table=staging_table)
 
+            conn.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_catalog_flat; mv_catalog_flat"))
+            conn.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_track_extended; "))
+            print(f"🏁 Представления обновлены.")
+
             _cleanup_staging_v2(conn, upload_id, staging_table=staging_table)
             success = True
 

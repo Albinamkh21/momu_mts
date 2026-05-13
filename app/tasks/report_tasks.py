@@ -1,5 +1,6 @@
 import os
 import polars as pl
+import pandas as pd
 from sqlalchemy import create_engine, text
 from core.celery_app import celery_app
 from celery import current_task
@@ -8,7 +9,9 @@ from .utils import clean_null_bytes
 from services.broadcaster import TaskProgress
 import uuid
 import time
-from typing import Optional
+from typing import Optional, List
+import re
+import xlsxwriter
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
@@ -572,6 +575,7 @@ def export_report_to_excel(partner_id: int, right_category_id: int, right_usage_
         print(f"❌ Ошибка при экспорте отчёта в Excel: {str(e)}")
         TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Ошибка при экспорте отчёта в Excel: {str(e)}")
         return {"status": "error", "message": str(e)}
+
 
 
 @celery_app.task(name="process_full_report_pipeline")
@@ -1277,3 +1281,441 @@ def _cleanup_staging_report_tables(conn, upload_id):
     elapsed = time.time() - t0
     print(f"🧹 Стейджинг report очищен для сессии {upload_id} ({elapsed:.1f} сек)")
     TaskProgress.emit(getattr(current_task.request, 'id', None), f"🧹 Стейджинг report очищен для сессии {upload_id} ({elapsed:.1f} сек)")
+
+
+def calculate_report_data(task_id: str, year: int, month_from: int, month_to: int, right_category_id: int, right_usage_type_id: int, label_ids: Optional[List[int]] = None):
+    """
+    Расчет данных отчета на основе параметров.
+    Пока просто выводит параметры.
+    """
+    print(f"📊 Начало расчета отчета")
+    print(f"  - Год: {year}")
+    print(f"  - Период месяцев: {month_from} - {month_to}")
+    print(f"  - Категория прав: {right_category_id}")
+    print(f"  - Тип использования: {right_usage_type_id}")
+    print(f"  - Лейблы: {label_ids if label_ids else 'все'}")
+    
+    TaskProgress.emit(task_id, f"📊 Начало расчета отчета для периода {month_from}-{month_to}/{year}")
+    TaskProgress.emit(task_id, f"  Категория прав: {right_category_id}, Тип использования: {right_usage_type_id}")
+    
+    if label_ids:
+        TaskProgress.emit(task_id, f"  Фильтр по лейблам: {label_ids}")
+    else:
+        TaskProgress.emit(task_id, "  Лейблы: все")
+    
+    print(f"✅ Расчет данных отчета завершен")
+    TaskProgress.emit(task_id, "✅ Расчет данных отчета завершен")
+
+
+def export_report_data_in_file(task_id: str, year: int, month_from: int, month_to: int, right_category_id: int, right_usage_type_id: int, label_ids: Optional[List[int]] = None):
+    """
+    Экспорт данных отчета в файл.
+    Пока просто выводит параметры.
+    """
+    print(f"💾 Начало экспорта отчета в файл")
+    print(f"  - Год: {year}")
+    print(f"  - Период месяцев: {month_from} - {month_to}")
+    print(f"  - Категория прав: {right_category_id}")
+    print(f"  - Тип использования: {right_usage_type_id}")
+    print(f"  - Лейблы: {label_ids if label_ids else 'все'}")
+    
+    TaskProgress.emit(task_id, f"💾 Начало экспорта отчета для периода {month_from}-{month_to}/{year}")
+    
+    filename = f"report_{year}_{month_from}_{month_to}_{right_category_id}_{right_usage_type_id}.xlsx"
+    print(f"  - Файл: {filename}")
+    TaskProgress.emit(task_id, f"  Файл: {filename}")
+    
+    print(f"✅ Экспорт отчета в файл завершен")
+    TaskProgress.emit(task_id, "✅ Экспорт отчета в файл завершен")
+
+
+@celery_app.task(name="create_report_task")
+def create_report_task(year: int, month_from: int, month_to: int, right_category_id: int, right_usage_type_id: int, label_ids: Optional[str] = None):
+    """
+    Создание отчета:
+    1. Расчет данных отчета (calculate_report_data)
+    2. Экспорт данных в файл (export_report_data_in_file)
+    """
+    try:
+        task_id = current_task.request.id
+        print(f"🚀 Задача создания отчета запущена (task_id: {task_id})")
+        TaskProgress.emit(task_id, f"🚀 Задача создания отчета запущена")
+        
+        # Преобразование label_ids из строки в список
+        labels_list = None
+        if label_ids:
+            if isinstance(label_ids, str) and label_ids.strip():
+                try:
+                    labels_list = [int(lid.strip()) for lid in label_ids.split(",") if lid.strip()]
+                except ValueError:
+                    pass
+            elif isinstance(label_ids, list):
+                labels_list = label_ids
+        
+        # Этап 1: Расчет данных
+        print(f"⏳ Этап 1: Расчет данных отчета")
+        TaskProgress.emit(task_id, "⏳ Этап 1: Расчет данных отчета")
+        calculate_report_data(task_id, year, month_from, month_to, right_category_id, right_usage_type_id, labels_list)
+        
+        # Этап 2: Экспорт в файл
+        print(f"⏳ Этап 2: Экспорт данных в файл")
+        TaskProgress.emit(task_id, "⏳ Этап 2: Экспорт данных в файл")
+        export_report_to_excel_total(task_id, year, month_from, month_to, right_category_id, right_usage_type_id, labels_list)
+        
+        print(f"✅ Задача создания отчета завершена успешно")
+        TaskProgress.emit(task_id, "✅ Задача создания отчета завершена успешно")
+        
+        return {
+            "status": "success",
+            "task_id": task_id,
+            "params": {
+                "year": year,
+                "month_from": month_from,
+                "month_to": month_to,
+                "right_category_id": right_category_id,
+                "right_usage_type_id": right_usage_type_id,
+                "label_ids": labels_list
+            }
+        }
+    except Exception as e:
+        print(f"❌ Ошибка при создании отчета: {str(e)}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Ошибка при создании отчета: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+
+
+
+def add_rights_to_report(df_base: pl.DataFrame, df_rights: pl.DataFrame, df_ext: pl.DataFrame, id_col: str) -> pl.DataFrame:
+    # 1. FIX: Принудительно приводим ID к одному типу и материализуем данные
+    df_base = df_base.with_columns(pl.col(id_col).cast(pl.Int64)).rechunk()
+    
+    if not df_rights.is_empty():
+        df_rights = df_rights.with_columns(pl.col(id_col).cast(pl.Int64))
+    if not df_ext.is_empty():
+        df_ext = df_ext.with_columns(pl.col(id_col).cast(pl.Int64))
+
+    # --- Объединение прав ---
+    if len(df_ext) > 0:
+        if len(df_rights) > 0:
+            existing_rights = df_rights.select([id_col, "category", "right_usage_type_code"]).unique()
+            df_ext_filtered = df_ext.join(
+                existing_rights,
+                on=[id_col, "category", "right_usage_type_code"],
+                how="anti"
+            )
+        else:
+            df_ext_filtered = df_ext
+
+        df_rights_all = pl.concat([df_rights, df_ext_filtered], how="vertical")
+        df_rights_all = df_rights_all.unique(
+            subset=[id_col, "category", "right_holder_name", "right_usage_type_code"]
+        )
+    else:
+        df_rights_all = df_rights
+
+    if df_rights_all.is_empty():
+        return df_base
+
+    # 2. FIX: Генерируем RN через cum_count (это ты уже сделала, оставляем)
+    df_rights_all = df_rights_all.with_columns(
+        rn = pl.lit(1).cum_count().over([id_col, "category", "right_usage_type_code"])
+    ).rechunk()
+
+    category_map = {"Author": "авторские", "Related": "смежные"}
+    groups = df_rights_all.select(["category", "right_usage_type_code"]).unique().sort(["category", "right_usage_type_code"])
+
+    for row in groups.iter_rows(named=True):
+        cat = row["category"]
+        rut_code = row["right_usage_type_code"]
+        cat_label = category_map.get(cat, cat)
+
+        df_group = df_rights_all.filter(
+            (pl.col("category") == cat) & (pl.col("right_usage_type_code") == rut_code)
+        )
+        
+        # 3. FIX: Безопасное получение макс. значения без использования .item()
+        max_rn_val = df_group["rn"].max()
+        max_rn = int(max_rn_val) if max_rn_val is not None else 0
+
+        for i in range(1, max_rn + 1):
+            suffix = f" {i}" if max_rn > 1 else ""
+
+            # Формируем группу для джойна
+            group_i = df_group.filter(pl.col("rn") == i).select([
+                pl.col(id_col),
+                pl.col("share_percentage").alias(f"Доля {cat_label} прав {rut_code}{suffix}, %"),
+                pl.col("right_holder_name").alias(f"Правообладатель ({cat_label}) {rut_code}{suffix}"),
+            ])
+            
+            # Джойним
+            df_base = df_base.join(group_i, on=id_col, how="left")
+            
+    return df_base
+
+    
+
+@celery_app.task(name="export_report_to_excel_total")
+def export_report_to_excel_total(
+    task_id: int,
+    year: int,
+    month_from: int,
+    month_to: int,
+    right_category_id: int,
+    right_usage_type_id: int,
+    labels: Optional[List[int]] = None
+):
+    try:
+        print("📤 Начинаем экспорт сводного отчёта в Excel (по правообладателям)...")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), "📤 Начинаем экспорт...")
+
+        # ---------- 1. Построение основного запроса (с track_id и right_holder_name) ----------
+        labels_condition = ""
+        labels_params = {}
+        if labels:
+            placeholders = ",".join([f":lid{i}" for i in range(len(labels))])
+            labels_condition = f" AND  tl.label_id IN ({placeholders}) "
+            for i, lid in enumerate(labels):
+                labels_params[f"lid{i}"] = lid
+
+        base_query = text(f"""
+            SELECT
+                t.track_id track_id,
+                r.r_label_own_code AS "Отчет код лейбла",
+                r.r_isrc AS "Отчет ISRC",
+                r.r_track_name AS "Отчет название трека",
+                r.r_artist_name AS "Отчет исполнитель",
+                r.r_authors AS "Отчет авторы",
+                t.label_own_code AS "Код лейбла",
+                t.isrc AS "Код ISRC",
+                t.track_name AS "Название трека",
+                t.artist_name AS "Исполнитель",
+                t.composer AS "Автор музыки",
+                t.lyricist AS "Автор текста",
+                t.authors AS "Авторы",
+                r.play_count AS "Кол-во прослушиваний",
+                r.payout_amount AS "Сумма выплат",
+                r.price_per_play AS "Цена за прослушивание",
+                fs.code AS "Источник совпадения",
+                l.code AS right_holder_name
+            FROM report r
+            JOIN mv_track_extended t ON t.track_id = r.track_id
+            JOIN track_label tl ON tl.track_id = t.track_id
+            JOIN label l ON l.id = tl.label_id
+            LEFT JOIN finding_source fs ON fs.id = r.finding_source
+            WHERE r.right_category_id = :right_category_id
+            AND r.right_usage_type_id = :right_usage_type_id
+            AND r.report_year = :year
+            AND r.report_month BETWEEN :month_from AND :month_to
+            {labels_condition}
+            ORDER BY l.code
+        """)
+
+        with engine.connect() as conn:
+            query_params = {
+                "right_category_id": right_category_id,
+                "right_usage_type_id": right_usage_type_id,
+                "year": year,
+                "month_from": month_from,
+                "month_to": month_to,
+            }
+            if labels:
+                query_params.update(labels_params)
+
+            result = conn.execute(base_query, query_params)
+            data = list(result.mappings())
+            df_base = pl.DataFrame(data, infer_schema_length=None)
+
+            # Приведение Object -> Utf8 (если нужно)
+            if not df_base.is_empty():
+                df_base = df_base.with_columns(pl.col(pl.Object).cast(pl.Utf8))
+           print("Сбор данных завершён, добавляем права к трекам...")
+           TaskProgress.emit(getattr(current_task.request, 'id', None), "Сбор данных завершён, добавляем права к трекам...")
+
+
+
+            # Метаданные для имени файла
+            meta_row = conn.execute(text("""
+                SELECT COALESCE(p.code, p.id::TEXT) AS partner_code,
+                       rc.name AS right_category_name,
+                       rut.code AS right_usage_type_code
+                FROM partners p
+                CROSS JOIN right_category rc
+                CROSS JOIN right_usage_type rut
+                WHERE rc.id = :right_category_id AND rut.id = :right_usage_type_id
+            """), {
+                "right_category_id": right_category_id,
+                "right_usage_type_id": right_usage_type_id,
+            }).fetchone()
+
+            partner_code = meta_row.partner_code if meta_row else "unknown_partner"
+            right_category_name = meta_row.right_category_name if meta_row else str(right_category_id)
+            right_usage_type_code = meta_row.right_usage_type_code if meta_row else str(right_usage_type_id)
+
+        with engine.connect() as conn:
+            track_ids = df_base["track_id"].unique().to_list()
+            if track_ids:
+                # Прямые права
+                rights_query = text("""
+                    SELECT DISTINCT
+                        tr.track_id,
+                        rc.name AS category,
+                        rh.name AS right_holder_name,
+                        tr.share_percentage,
+                        rut.code AS right_code,
+                        ROW_NUMBER() OVER(
+                        PARTITION BY tr.track_id, rc.name, rut.code 
+                        ORDER BY tr.share_percentage DESC
+                    ) as rn
+                    FROM track_right tr
+                    JOIN right_category rc ON rc.id = tr.right_category_id
+                    JOIN right_holder rh ON rh.id = tr.right_holder_id
+                    JOIN right_usage_type rut ON rut.id = tr.right_usage_type_id
+                    WHERE tr.track_id = ANY(:track_ids)
+                    AND tr.right_category_id = :rcid
+                     AND tr.right_usage_type_id = :rutid
+                """)
+                #res_rights = conn.execute(rights_query, {"track_ids": track_ids})
+                #df_rights = pl.DataFrame(res_rights.mappings()) 
+                df_rights = pl.read_database(rights_query, conn, 
+                                        execute_options={"parameters": {
+                                            "track_ids": track_ids,
+                                            "rcid": right_category_id,
+                                            "rutid": right_usage_type_id
+                                        }})
+               
+               
+               
+               
+               
+                ext_query = text("""
+                    SELECT DISTINCT
+                        t_all.id AS track_id,
+                        rc.name AS category,
+                        rh.name AS right_holder_name,
+                        tr.share_percentage as share_percentage,
+                        rut.code AS right_usage_type_code
+                    FROM track_right tr
+                    JOIN right_category rc ON rc.id = tr.right_category_id
+                    JOIN right_holder rh ON rh.id = tr.right_holder_id
+                    JOIN right_usage_type rut ON rut.id = tr.right_usage_type_id
+                    JOIN track t_orig ON t_orig.id = tr.track_id
+                    JOIN track t_all ON split_part(t_all.label_own_code, '-', 1) = split_part(t_orig.label_own_code, '-', 1)
+                    WHERE t_all.id = ANY(:track_ids)
+                    AND t_all.id != tr.track_id
+                """)
+                res_ext = conn.execute(ext_query, {"track_ids": track_ids})
+                df_ext = pl.DataFrame(res_ext.mappings()) 
+            else:
+                df_rights = df_ext = pl.DataFrame()
+
+
+        # Добавляем права (используем безопасную функцию на pandas)
+
+        if not df_rights.is_empty():
+    
+            df_rights = df_rights.with_columns([
+                (
+                    pl.col("category") + pl.lit(" ") + 
+                    pl.col("right_code") + pl.lit(" ") + 
+                    pl.col("rn").cast(pl.Utf8)
+                ).alias("base_name")
+            ])
+
+            # Колонки для имен
+            df_h_pivot = df_rights.pivot(
+                values="right_holder_name",
+                index="track_id",
+                on="base_name",
+                aggregate_function="first"
+            )
+
+            
+            df_rights = df_rights.with_columns(
+                (pl.col("base_name") + pl.lit(" %")).alias("share_name")
+            )
+            
+            df_s_pivot = df_rights.pivot(
+                values="share_percentage",
+                index="track_id",
+                on="share_name", # Здесь будет "Author DIGITAL 1 %"
+                aggregate_function="first"
+            )
+
+            # Приклеиваем к базе
+            df_base = df_base.join(df_h_pivot, on="track_id", how="left")
+            df_base = df_base.join(df_s_pivot, on="track_id", how="left")   
+
+
+
+      
+        
+
+
+      
+
+        storage_dir = "/app/storage"
+        os.makedirs(storage_dir, exist_ok=True)
+        filename = f"report_total_{year}_{month_from}_{month_to}_{partner_code}_{right_category_name}_{right_usage_type_code}.xlsx"
+        output_path = os.path.join(storage_dir, filename)
+
+        # ---------- 4. Обработка пустого результата ----------
+        if df_base.is_empty():
+            empty_df = pl.DataFrame({"Сообщение": ["Нет данных для указанных параметров"]})
+            empty_df.write_excel(output_path, worksheet="Информация")
+            print("⚠️ Нет данных для экспорта, создан файл с сообщением.")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), "⚠️ Нет данных для экспорта.")
+            return {
+                "status": "success",
+                "rows_exported": 0,
+                "sheets_count": 0,
+                "output_file": output_path,
+            }
+
+        # ---------- 5. Разбивка на листы и запись в Excel ----------
+        # Максимально "чистый" и быстрый вариант для Polars
+        right_holders = (
+            df_base["right_holder_name"]
+            .unique()
+            .drop_nulls()
+            .to_list()
+        )
+        df_parts = df_base.drop("track_id").partition_by("right_holder_name", as_dict=True)
+        
+        with xlsxwriter.Workbook(output_path) as workbook:
+            # Общий лист "Все данные" (без колонки right_holder_name)
+            df_all = df_base.drop(["right_holder_name", "track_id"])
+            df_all.write_excel(workbook, worksheet="Все данные")
+
+            # Листы по каждому правообладателю
+            for holder in right_holders:
+                df_holder = df_base.filter(pl.col("right_holder_name") == holder).drop(["right_holder_name", "track_id"])
+                
+
+                # Обработка имени листа (очистка и уникальность)
+                sheet_name = holder[:31] if len(holder) > 31 else holder
+                sheet_name = re.sub(r'[\\/*?:\[\]]', '_', sheet_name)
+                original = sheet_name
+                cnt = 1
+                while workbook.get_worksheet_by_name(sheet_name) is not None:
+                    suffix = f"_{cnt}"
+                    sheet_name = original[:31 - len(suffix)] + suffix
+                    cnt += 1
+
+                df_holder.write_excel(workbook, worksheet=sheet_name)
+                print(f"  📄 Вкладка создана для: {holder}")
+                TaskProgress.emit(getattr(current_task.request, 'id', None), f"  📄 Вкладка создана для: {holder}")
+
+        print(f"✅ Сводный отчёт экспортирован в файл: {output_path}")
+        print(f"📊 Всего записей: {len(df_base)}, вкладок: {len(right_holders) + 1}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Файл: {output_path}")
+        return {
+            "status": "success",
+            "rows_exported": len(df_base),
+            "sheets_count": len(right_holders) + 1,
+            "output_file": output_path,
+        }
+
+    except Exception as e:
+        print(f"❌ Ошибка при экспорте сводного отчёта в Excel: {str(e)}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Ошибка: {str(e)}")
+        return {"status": "error", "message": str(e)}

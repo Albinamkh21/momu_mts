@@ -1,5 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel, Field
+from typing import List, Optional as TypingOptional
 import shutil
 import os
 from uuid import uuid4
@@ -10,7 +11,7 @@ from tasks.report_tasks import (
     process_report_file,
     insert_data_into_final_report_table, group_report_data, find_lost_track,
     process_full_report_pipeline, normalize_person_data, normalize_staging_report_agg, normalize_data,
-    export_report_to_excel
+    export_report_to_excel, create_report_task
 )
 
 router = APIRouter()
@@ -56,6 +57,18 @@ async def get_right_usage_types():
     try:
         with sync_engine.connect() as conn:
             rows = conn.execute(text("SELECT id, code || ' - ' || name AS label FROM right_usage_type ORDER BY id"))
+            result = [{"id": r.id, "label": r.label} for r in rows]
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/labels")
+async def get_labels():
+    """Return labels for filtering reports."""
+    try:
+        with sync_engine.connect() as conn:
+            rows = conn.execute(text("SELECT id, name AS label FROM label ORDER BY name"))
             result = [{"id": r.id, "label": r.label} for r in rows]
         return result
     except Exception as e:
@@ -253,6 +266,10 @@ async def get_report_data_endpoint(
         raise HTTPException(status_code=500, detail=f"Ошибка при запуске пайплайна: {str(e)}")
 
 
+
+
+
+
 @router.post("/group_report_data")
 async def group_report_data_endpoint():
     """
@@ -374,3 +391,54 @@ async def export_report_to_excel_endpoint(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка при запуске экспорта: {str(e)}")
+
+
+@router.post("/create_report")
+async def create_report(
+    year: int = Form(...),
+    month_from: int = Form(..., ge=1, le=12),
+    month_to: int = Form(..., ge=1, le=12),
+    right_category_id: int = Form(...),
+    right_usage_type_id: int = Form(...),
+    label_ids: str = Form(default=""),
+):
+    """
+    Создание отчёта с собранными данными и экспортом в файл.
+    
+    Параметры:
+    - year: год отчёта
+    - month_from: начальный месяц (1-12)
+    - month_to: конечный месяц (1-12)
+    - right_category_id: ID категории прав
+    - right_usage_type_id: ID типа использования прав
+    - label_ids: список ID лейблов через запятую (если пусто, то все лейблы)
+    """
+    try:
+        # Преобразование label_ids из строки в список
+        labels_list = None
+        if label_ids and label_ids.strip():
+            try:
+                labels_list = [int(lid.strip()) for lid in label_ids.split(",") if lid.strip()]
+            except ValueError:
+                raise HTTPException(status_code=400, detail="label_ids должны быть числами через запятую")
+
+        task_result = create_report_task.delay(
+            year, month_from, month_to, right_category_id, right_usage_type_id, labels_list
+        )
+        return {
+            "message": "Задача создания отчёта запущена",
+            "task_id": task_result.id,
+            "params": {
+                "year": year,
+                "month_from": month_from,
+                "month_to": month_to,
+                "right_category_id": right_category_id,
+                "right_usage_type_id": right_usage_type_id,
+                "label_ids": labels_list if labels_list else "все лейблы"
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка при запуске создания отчёта: {str(e)}")
+

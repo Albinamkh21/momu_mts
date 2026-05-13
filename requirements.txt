@@ -12,6 +12,10 @@ pydantic-settings
 psycopg2-binary
 adbc-driver-postgresql
 xlsxwriter
+pandas
+numpy==1.26.4
+pyarrow>=14.0.1
+openpyxl
 
 watchfiles
 aioredis
