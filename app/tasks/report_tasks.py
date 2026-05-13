@@ -1479,7 +1479,7 @@ def export_report_to_excel_total(
 
         base_query = text(f"""
             SELECT
-                t.track_id track_id,
+                t.track_id as track_id,
                 r.r_label_own_code AS "Отчет код лейбла",
                 r.r_isrc AS "Отчет ISRC",
                 r.r_track_name AS "Отчет название трека",
@@ -1522,14 +1522,15 @@ def export_report_to_excel_total(
                 query_params.update(labels_params)
 
             result = conn.execute(base_query, query_params)
+            
             data = list(result.mappings())
             df_base = pl.DataFrame(data, infer_schema_length=None)
 
             # Приведение Object -> Utf8 (если нужно)
             if not df_base.is_empty():
                 df_base = df_base.with_columns(pl.col(pl.Object).cast(pl.Utf8))
-           print("Сбор данных завершён, добавляем права к трекам...")
-           TaskProgress.emit(getattr(current_task.request, 'id', None), "Сбор данных завершён, добавляем права к трекам...")
+            print("Сбор данных завершён, добавляем права к трекам...")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), "Сбор данных завершён, добавляем права к трекам...")
 
 
 
@@ -1557,7 +1558,7 @@ def export_report_to_excel_total(
                 # Прямые права
                 rights_query = text("""
                     SELECT DISTINCT
-                        tr.track_id,
+                        tr.track_id AS track_id,
                         rc.name AS category,
                         rh.name AS right_holder_name,
                         tr.share_percentage,
@@ -1679,11 +1680,11 @@ def export_report_to_excel_total(
             .drop_nulls()
             .to_list()
         )
-        df_parts = df_base.drop("track_id").partition_by("right_holder_name", as_dict=True)
+        #df_parts = df_base.partition_by("right_holder_name", as_dict=True)
         
         with xlsxwriter.Workbook(output_path) as workbook:
             # Общий лист "Все данные" (без колонки right_holder_name)
-            df_all = df_base.drop(["right_holder_name", "track_id"])
+            df_all = df_base.drop(["right_holder_name"])
             df_all.write_excel(workbook, worksheet="Все данные")
 
             # Листы по каждому правообладателю
