@@ -1571,7 +1571,7 @@ def export_report_to_excel_total(
                     JOIN right_holder rh ON rh.id = tr.right_holder_id
                     JOIN right_usage_type rut ON rut.id = tr.right_usage_type_id
                     WHERE tr.track_id = ANY(:track_ids)
-                    AND tr.right_category_id = :rcid
+                    AND tr.right_category_id {category_filter}
                      AND tr.right_usage_type_id = :rutid
                 """)
                 #res_rights = conn.execute(rights_query, {"track_ids": track_ids})
