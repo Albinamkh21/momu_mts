@@ -502,6 +502,10 @@ CREATE INDEX IF NOT EXISTS idx_person_tokens_gin ON person USING gin (tokens);
 
 
 
+            
+
+
+
 
             
 CREATE TABLE staging_person (
@@ -539,4 +543,80 @@ ALTER TABLE staging_cataloog
     ADD COLUMN track_name_tokens TEXT[];
  
 
-track_name_norm_key
+CREATE MATERIALIZED VIEW mv_track_extended AS
+WITH authors_flat AS (
+    SELECT 
+        tc.track_id,
+        -- Собираем всех исполнителей и авторов через запятую без дублей
+        string_agg(DISTINCT p.full_name::text, ', '::text) FILTER (WHERE tc.role::text = 'artist_name'::text) AS artist_name,
+        string_agg(DISTINCT p.full_name::text, ', '::text) FILTER (WHERE tc.role::text = 'track_artist_name'::text) AS track_artist_name,
+        string_agg(DISTINCT p.full_name::text, ', '::text) FILTER (WHERE tc.role::text = 'composer'::text) AS composer,
+        string_agg(DISTINCT p.full_name::text, ', '::text) FILTER (WHERE tc.role::text = 'lyricist'::text) AS lyricist,
+        string_agg(DISTINCT p.full_name::text, ', '::text) FILTER (WHERE tc.role::text = 'authors'::text) AS authors
+    FROM track_contribution tc
+    JOIN person p ON p.id = tc.person_id
+    GROUP BY tc.track_id
+)
+SELECT DISTINCT ON (t.id) 
+    t.id AS track_id,
+    t.isrc::text AS isrc,
+    t.title AS track_name,	
+    t.label_own_code::text AS label_own_code,
+    af.artist_name,
+    af.track_artist_name,
+    af.composer,
+    af.lyricist,
+    af.authors,	
+    tl.label_id,
+    COALESCE(l.name, ''::citext)::text AS label_name,
+
+
+    COALESCE(r.upc, ''::character varying)::text AS upc,
+    t.meta ->> 'genre'::text AS genre_name,
+    COALESCE(r.title, ''::text) AS album_name,
+    t.meta ->> 'track_number'::text AS track_number,
+    CASE 
+        WHEN t.explicit THEN 'Да'::text 
+        ELSE 'Нет'::text 
+    END AS explicit,
+    t.duration::text AS duration
+   
+FROM track t
+LEFT JOIN authors_flat af ON af.track_id = t.id
+LEFT JOIN track_release tr ON tr.track_id = t.id
+LEFT JOIN release r ON r.id = tr.release_id
+LEFT JOIN track_label tl ON tl.track_id = t.id
+LEFT JOIN label l ON l.id = tl.label_id
+ORDER BY t.id;
+
+CREATE UNIQUE INDEX idx__mv_track_extended__track_id ON mv_track_extended(track_id);
+
+REFRESH MATERIALIZED VIEW CONCURRENTLY mv_track_extended;
+
+
+
+
+CREATE TABLE report (
+    id SERIAL PRIMARY KEY,
+    
+   
+    partner_id INT NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
+    right_category_id INT NOT NULL REFERENCES right_category(id),
+    right_usage_type_id INT NOT NULL REFERENCES right_usage_type(id),
+    
+    -- Период
+    report_month INT NOT NULL,
+    report_year INT NOT NULL,
+    
+    -- Финансы
+    play_count INT DEFAULT 0,
+    payout_amount NUMERIC(20, 4) DEFAULT 0.0,
+    price_per_play NUMERIC(20, 6) DEFAULT 0.0,
+
+
+
+    
+
+    upload_id TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

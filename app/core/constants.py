@@ -7,6 +7,7 @@
 class RightCategory:
     AUTHOR = 1   # Авторские права
     RELATED = 2  # Смежные права
+    BOTH = 3     # Все права
 
 
 class RightUsageType:

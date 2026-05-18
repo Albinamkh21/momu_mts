@@ -318,29 +318,19 @@ def insert_data_into_final_report_table(partner_id: int, right_category_id: int,
         # === Финальный шаг: перенос данных из staging_report_ids в report ===
         final_insert_sql = text("""
             INSERT INTO report (
-                track_id, partner_id, right_category_id, right_usage_type_id,
-                report_month, report_year, play_count, payout_amount, price_per_play, finding_source,
-                r_isrc, r_label_own_code, r_track_name, r_artist_name, r_authors, r_servise_name
+                partner_id, right_category_id, right_usage_type_id,
+                report_month, report_year,  payout_amount,  upload_id
             )
             SELECT
-                si.track_id,
                 :partner_id,
                 :right_category_id,
                 :right_usage_type_id,
                 :month,
                 :year,
-                s.play_count,
-                s.payout_amount,
-                s.price_per_play,
-                si.finding_source,
-                s.isrc,
-                s.label_own_code,
-                s.track_name,
-                s.artist_name,
-                s.authors,
-                s.service_name
-            FROM staging_report_ids si 
-            INNER JOIN staging_report_agg s ON s.id = si.staging_id AND s.upload_id = :uid and si.upload_id = :uid;
+                sum(s.payout_amount),
+                :uid
+            FROM staging_report_agg  s
+            where  s.upload_id = :uid ;
         """)
 
         with engine.begin() as connection:
@@ -1269,14 +1259,7 @@ def _cleanup_staging_report_tables(conn, upload_id):
         text(f"DELETE FROM staging_report WHERE upload_id = :uid"),
         {"uid": upload_id}
     )
-    conn.execute(
-        text("DELETE FROM staging_report_agg WHERE upload_id = :uid"),
-        {"uid": upload_id}
-    )
-    conn.execute(
-        text("DELETE FROM staging_report_ids WHERE upload_id = :uid"),
-        {"uid": upload_id}
-    )
+  
     elapsed = time.time() - t0
     print(f"🧹 Стейджинг report очищен для сессии {upload_id} ({elapsed:.1f} сек)")
     TaskProgress.emit(getattr(current_task.request, 'id', None), f"🧹 Стейджинг report очищен для сессии {upload_id} ({elapsed:.1f} сек)")
@@ -1452,7 +1435,6 @@ def add_rights_to_report(df_base: pl.DataFrame, df_rights: pl.DataFrame, df_ext:
     return df_base
 
     
-
 @celery_app.task(name="export_report_to_excel_total")
 def export_report_to_excel_total(
     task_id: int,
@@ -1463,9 +1445,18 @@ def export_report_to_excel_total(
     right_usage_type_id: int,
     labels: Optional[List[int]] = None
 ):
+    
+    if right_category_id == RightCategory.BOTH:
+        category_filter = f"IN ({RightCategory.AUTHOR}, {RightCategory.RELATED})"
+    else:
+        category_filter = f"= {right_category_id}"
     try:
         print("📤 Начинаем экспорт сводного отчёта в Excel (по правообладателям)...")
         TaskProgress.emit(getattr(current_task.request, 'id', None), "📤 Начинаем экспорт...")
+
+
+        total_source_money = 0.0
+        total_distributed_money = 0.0
 
         # ---------- 1. Построение основного запроса (с track_id и right_holder_name) ----------
         labels_condition = ""
@@ -1479,6 +1470,7 @@ def export_report_to_excel_total(
         base_query = text(f"""
             SELECT
                 t.track_id as track_id,
+                l.id AS label_id,
                 r.r_label_own_code AS "Отчет код лейбла",
                 r.r_isrc AS "Отчет ISRC",
                 r.r_track_name AS "Отчет название трека",
@@ -1495,11 +1487,11 @@ def export_report_to_excel_total(
                 r.payout_amount AS "Сумма выплат",
                 r.price_per_play AS "Цена за прослушивание",
                 fs.code AS "Источник совпадения",
-                l.code AS right_holder_name
+                l.code AS  label_code
             FROM report r
-            JOIN mv_track_extended t ON t.track_id = r.track_id
-            JOIN track_label tl ON tl.track_id = t.track_id
-            JOIN label l ON l.id = tl.label_id
+            left JOIN mv_track_extended t ON t.track_id = r.track_id
+            left JOIN track_label tl ON tl.track_id = t.track_id
+            left JOIN label l ON l.id = tl.label_id
             LEFT JOIN finding_source fs ON fs.id = r.finding_source
             WHERE r.right_category_id = :right_category_id
             AND r.right_usage_type_id = :right_usage_type_id
@@ -1534,14 +1526,14 @@ def export_report_to_excel_total(
 
 
             # Метаданные для имени файла
-            meta_row = conn.execute(text("""
+            meta_row = conn.execute(text(f"""
                 SELECT COALESCE(p.code, p.id::TEXT) AS partner_code,
                        rc.name AS right_category_name,
                        rut.code AS right_usage_type_code
                 FROM partners p
                 CROSS JOIN right_category rc
                 CROSS JOIN right_usage_type rut
-                WHERE rc.id = :right_category_id AND rut.id = :right_usage_type_id
+                WHERE rc.id  {category_filter} AND rut.id = :right_usage_type_id
             """), {
                 "right_category_id": right_category_id,
                 "right_usage_type_id": right_usage_type_id,
@@ -1555,13 +1547,14 @@ def export_report_to_excel_total(
             track_ids = df_base["track_id"].unique().to_list()
             if track_ids:
                 # Прямые права
-                rights_query = text("""
+                rights_query = text(f"""
                     SELECT DISTINCT
                         tr.track_id AS track_id,
                         rc.name AS category,
                         rh.name AS right_holder_name,
                         tr.share_percentage,
                         rut.code AS right_code,
+                        rh.label_id as label_id,
                         ROW_NUMBER() OVER(
                         PARTITION BY tr.track_id, rc.name, rut.code 
                         ORDER BY tr.share_percentage DESC
@@ -1586,69 +1579,11 @@ def export_report_to_excel_total(
                
                
                
-               
-                ext_query = text("""
-                    SELECT DISTINCT
-                        t_all.id AS track_id,
-                        rc.name AS category,
-                        rh.name AS right_holder_name,
-                        tr.share_percentage as share_percentage,
-                        rut.code AS right_usage_type_code
-                    FROM track_right tr
-                    JOIN right_category rc ON rc.id = tr.right_category_id
-                    JOIN right_holder rh ON rh.id = tr.right_holder_id
-                    JOIN right_usage_type rut ON rut.id = tr.right_usage_type_id
-                    JOIN track t_orig ON t_orig.id = tr.track_id
-                    JOIN track t_all ON split_part(t_all.label_own_code, '-', 1) = split_part(t_orig.label_own_code, '-', 1)
-                    WHERE t_all.id = ANY(:track_ids)
-                    AND t_all.id != tr.track_id
-                """)
-                res_ext = conn.execute(ext_query, {"track_ids": track_ids})
-                df_ext = pl.DataFrame(res_ext.mappings()) 
-            else:
-                df_rights = df_ext = pl.DataFrame()
-
-
-        # Добавляем права (используем безопасную функцию на pandas)
-
-        if not df_rights.is_empty():
-    
-            df_rights = df_rights.with_columns([
-                (
-                    pl.col("category") + pl.lit(" ") + 
-                    pl.col("right_code") + pl.lit(" ") + 
-                    pl.col("rn").cast(pl.Utf8)
-                ).alias("base_name")
-            ])
-
-            # Колонки для имен
-            df_h_pivot = df_rights.pivot(
-                values="right_holder_name",
-                index="track_id",
-                on="base_name",
-                aggregate_function="first"
-            )
-
-            
-            df_rights = df_rights.with_columns(
-                (pl.col("base_name") + pl.lit(" %")).alias("share_name")
-            )
-            
-            df_s_pivot = df_rights.pivot(
-                values="share_percentage",
-                index="track_id",
-                on="share_name", # Здесь будет "Author DIGITAL 1 %"
-                aggregate_function="first"
-            )
-
-            # Приклеиваем к базе
-            df_base = df_base.join(df_h_pivot, on="track_id", how="left")
-            df_base = df_base.join(df_s_pivot, on="track_id", how="left")   
 
 
 
-      
-        
+   
+
 
 
       
@@ -1672,50 +1607,392 @@ def export_report_to_excel_total(
             }
 
         # ---------- 5. Разбивка на листы и запись в Excel ----------
-        # Максимально "чистый" и быстрый вариант для Polars
-        right_holders = (
-            df_base["right_holder_name"]
-            .unique()
-            .drop_nulls()
-            .to_list()
-        )
-        df_parts = df_base.drop("track_id").partition_by("right_holder_name", as_dict=True)
-        
+        holders_mapping = (
+                df_base.select(["label_code", "label_id"])
+                .unique()
+                .drop_nulls()
+                .to_dicts()
+            )
+
+        if not df_rights.is_empty():
+         
+            df_rights = df_rights.with_columns([
+                (
+                    pl.col("category") + pl.lit(" ") + 
+                    pl.col("right_code") + pl.lit(" ") + 
+                    pl.col("rn").cast(pl.Utf8)
+                ).alias("base_name")
+            ])
+
         with xlsxwriter.Workbook(output_path) as workbook:
-            # Общий лист "Все данные" (без колонки right_holder_name)
-            df_all = df_base.drop(["right_holder_name", "track_id"])
-            df_all.write_excel(workbook, worksheet="Все данные")
+            # --- 5.1 Сводный лист ---
+            df_summary = (
+                df_base.group_by("label_code")
+                .agg([
+                    pl.col("Кол-во прослушиваний").sum(),
+                    pl.col("Сумма выплат").sum()
+                ])
+                .sort("label_code")
+                .rename({"label_code": "Правообладатель"})
+            )
+            df_summary.write_excel(workbook, worksheet="Все данные")
 
-            # Листы по каждому правообладателю
-            for holder in right_holders:
-                df_holder = df_base.filter(pl.col("right_holder_name") == holder).drop(["right_holder_name", "track_id"])
+            # --- 5.2 Детальные листы по лейблам ---
+            total_source_money = float(df_base["Сумма выплат"].sum())
+            
+            for holder in holders_mapping:
+                h_code = str(holder["label_code"])
+                h_id = holder["label_id"]
+
+                # Фильтруем данные и права для конкретного лейбла
+                df_holder_base = df_base.filter(pl.col("label_id") == h_id)
+                df_rights_local = df_rights.filter(pl.col("label_id") == h_id)
+
+                # Задаем пустые списки-заглушки заранее
+                rights_columns = []
+                payout_columns = []
+
+                if not df_rights_local.is_empty():
+                    # 1. Создаем уникальный ключ для колонки: "Категория + Тип + Имя"
+                    # Это гарантирует, что "Author PUB Эффектив" всегда будет одной колонкой
+                    df_rights_local = df_rights_local.with_columns([
+                        (
+                            pl.col("category") + pl.lit(" ") + 
+                            pl.col("right_code") + pl.lit(" ") + 
+                            pl.col("right_holder_name")
+                        ).alias("column_key")
+                    ])
+
+                    # 2. Пивот для имен (записываем само имя правообладателя)
+                    df_h_pivot = df_rights_local.pivot(
+                        values="right_holder_name",
+                        index="track_id", 
+                        on="column_key",
+                        aggregate_function="first"
+                    )
+                    
+                    # 3. Пивот для процентов
+                    # К ключу добавляем " %", чтобы колонки процентов шли следом
+                    df_s_pivot = df_rights_local.with_columns(
+                        (pl.col("column_key") + pl.lit(" %")).alias("share_column_key")
+                    ).pivot(
+                        values="share_percentage",
+                        index="track_id",
+                        on="share_column_key",
+                        aggregate_function="first"
+                    )
+
+                    # 4. Соединяем всё в один лист
+                    df_final_sheet = df_holder_base.join(df_h_pivot, on="track_id", how="left")
+                    df_final_sheet = df_final_sheet.join(df_s_pivot, on="track_id", how="left")
+
+                    # Список колонок, которые образовались после пивота (перенесли сюда для безопасности)
+                    rights_columns = [c for c in df_h_pivot.columns if c != "track_id"] + \
+                                    [c for c in df_s_pivot.columns if c != "track_id"]
+                else:
+                    df_final_sheet = df_holder_base
+
+                # Убираем технические колонки
+                #df_to_save = df_final_sheet.drop(["label_code", "track_id", "label_id"])
+
+                # ---------- АГРЕГАЦИЯ ПРОИЗВЕДЕНИЯ (СХЛОПЫВАНИЕ СУФФИКСОВ) ----------
+                # 1. Выделяем базовый код без суффикса (из колонки "Код лейбла")
+                df_final_sheet = df_final_sheet.with_columns(
+                    pl.col("Код лейбла").str.split("-").list.get(0).alias("clean_label_code")
+                )
+
+                # ---------- РАСЧЕТ СУММЫ К РАСПРЕДЕЛЕНИЮ ----------
+                share_cols = [c for c in df_final_sheet.columns if c.endswith(" %")]
                 
+                if share_cols:
+                    coef = 0.5 if right_category_id == RightCategory.BOTH else 1.0
+                    for s_col in share_cols:
+                        payout_col_name = s_col.replace(" %", " Сумма к распределению")
+                        payout_columns.append(payout_col_name)
+                        
+                        df_final_sheet = df_final_sheet.with_columns(
+                            (
+                                pl.col("Сумма выплат") * coef * (pl.col(s_col).fill_null(0.0) / 100.0)
+                            ).alias(payout_col_name)
+                        )
 
-                # Обработка имени листа (очистка и уникальность)
-                sheet_name = holder[:31] if len(holder) > 31 else holder
-                sheet_name = re.sub(r'[\\/*?:\[\]]', '_', sheet_name)
-                original = sheet_name
-                cnt = 1
+                # 2. Группируем по clean_label_code, суммируем деньги, схлопываем права через max()
+                df_to_save = (
+                    df_final_sheet.group_by("clean_label_code")
+                    .agg([
+                        pl.col("Отчет код лейбла").first(),
+                        pl.col("Отчет ISRC").first(),
+                        pl.col("Отчет название трека").first(),
+                        pl.col("Отчет исполнитель").first(),
+                        pl.col("Отчет авторы").first(),
+                        pl.col("Код ISRC").fill_null("").max(),
+                        pl.col("Название трека").first(),
+                        pl.col("Исполнитель").first(),
+                        pl.col("Автор музыки").first(),
+                        pl.col("Автор текста").first(),
+                        pl.col("Авторы").first(),
+                        pl.col("Источник совпадения").first(),
+                        pl.col("Цена за прослушивание").mean(),
+                        
+                        # Суммируем статистику прослушиваний и денег со всех суффиксов
+                        pl.col("Кол-во прослушиваний").sum(),
+                        pl.col("Сумма выплат").sum(),
+                        
+                        # Собираем права со всех суффиксов в одну строку (игнорируя null)
+                        *[pl.col(c).max() for c in rights_columns],
+
+                        # Добавляем суммы к распределению (схлопываем через сумму)
+                        *[pl.col(c).sum() for c in payout_columns]
+                    ])
+                    .rename({"clean_label_code": "Код лейбла"})
+                )
+                # --------------------------------------------------------------------
+
+                if payout_columns and not df_to_save.is_empty():
+                    sheet_sum = df_to_save.select(pl.sum_horizontal(payout_columns)).sum().item()
+                    if sheet_sum is not None:
+                        total_distributed_money += sheet_sum
+
+                # Генерируем безопасное имя листа (не более 31 символа)
+                sheet_name = re.sub(r'[\\/*?:\[\]]', '_', h_code)[:31]
+                
+                # Проверка на уникальность имени листа
+                original_name = sheet_name
+                counter = 1
                 while workbook.get_worksheet_by_name(sheet_name) is not None:
-                    suffix = f"_{cnt}"
-                    sheet_name = original[:31 - len(suffix)] + suffix
-                    cnt += 1
+                    suffix = f"_{counter}"
+                    sheet_name = original_name[:31 - len(suffix)] + suffix
+                    counter += 1
 
-                df_holder.write_excel(workbook, worksheet=sheet_name)
-                print(f"  📄 Вкладка создана для: {holder}")
+                # ЗАПИСЬ
+                df_to_save.write_excel(workbook, worksheet=sheet_name)
+                
+                print(f"📄 Вкладка создана для: {h_code}")
                 TaskProgress.emit(getattr(current_task.request, 'id', None), f"  📄 Вкладка создана для: {holder}")
 
+
+        unassigned_money = total_source_money - total_distributed_money
+        balance_report = (
+            f"\n========================================\n"
+            f"📊 ФИНАНСОВАЯ СВЕРКА БАЛАНСА ОТЧЕТА:\n"
+            f"💰 Исходная сумма выплат (Всего): {total_source_money:,.2f}\n"
+            f"✅ Успешно распределено по долям: {total_distributed_money:,.2f}\n"
+            f"⚠️ Остаток (невостребованная сумма): {unassigned_money:,.2f}\n"
+            f"========================================\n"
+        )
+        print(balance_report)
+        TaskProgress.emit(getattr(current_task.request, 'id', None), balance_report)
+        
         print(f"✅ Сводный отчёт экспортирован в файл: {output_path}")
-        print(f"📊 Всего записей: {len(df_base)}, вкладок: {len(right_holders) + 1}")
+        print(f"📊 Всего записей: {len(df_base)}, вкладок: {len(holders_mapping) + 1}")
         TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Файл: {output_path}")
         return {
             "status": "success",
             "rows_exported": len(df_base),
-            "sheets_count": len(right_holders) + 1,
+            "sheets_count": len(holders_mapping) + 1,
             "output_file": output_path,
         }
 
     except Exception as e:
         print(f"❌ Ошибка при экспорте сводного отчёта в Excel: {str(e)}")
         TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Ошибка: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+
+
+import polars as pl
+from sqlalchemy import text
+from typing import Optional, List
+
+@celery_app.task(name="calculate_and_save_distribution_sql")
+def calculate_and_save_distribution_sql(
+    task_id: int,
+    year: int,
+    month_from: int,
+    month_to: int,
+    right_category_id: int,
+    right_usage_type_id: int,
+    labels: Optional[List[int]] = None
+):
+    category_filter = (
+        f"IN ({RightCategory.AUTHOR}, {RightCategory.RELATED})"
+        if right_category_id == RightCategory.BOTH
+        else f"= {right_category_id}"
+    )
+
+    labels_condition = ""
+    labels_params = {}
+    if labels:
+        placeholders = ",".join([f":lid{i}" for i in range(len(labels))])
+        labels_condition = f" AND tl.label_id IN ({placeholders}) "
+        for i, lid in enumerate(labels):
+            labels_params[f"lid{i}"] = lid
+
+    try:
+        print("🚀 Запуск прозрачного двухэтапного расчета распределения...")
+
+        with engine.begin() as conn:
+            
+            # --- ЭТАП 1: ОЧИСТКА СТАРЫХ КЭШЕЙ И РАСЧЕТОВ ---
+            conn.execute(text("""
+                DELETE FROM report_track_rights_cache 
+                WHERE report_year = :year AND month_from = :month_from AND month_to = :month_to
+                  AND right_category_id = :right_category_id AND right_usage_type_id = :right_usage_type_id;
+            """), {"year": year, "month_from": month_from, "month_to": month_to, "right_category_id": right_category_id, "right_usage_type_id": right_usage_type_id})
+
+            delete_distribution = text("""
+                DELETE FROM report_distribution 
+                WHERE report_year = :year AND report_month BETWEEN :month_from AND :month_to
+                  AND right_category_id = :right_category_id AND right_usage_type_id = :right_usage_type_id;
+            """)
+            conn.execute(delete_distribution, {"year": year, "month_from": month_from, "month_to": month_to, "right_category_id": right_category_id, "right_usage_type_id": right_usage_type_id})
+
+
+            # --- ЭТАП 2: ЗАМОРОЗКА РЕЗУЛЬТИРУЮЩИХ ПРАВ В ОТДЕЛЬНУЮ ТАБЛИЦУ ---
+          
+            cache_rights_query = text(f"""
+                INSERT INTO report_track_rights_cache (
+                    report_year, month_from, month_to,
+                    staging_id, track_id, right_holder_id, right_category_id, right_usage_type_id, share_percentage
+                )
+                WITH raw_candidates AS (
+                    -- Шаг 1: Собираем вообще всех кандидатов из сессии
+                    SELECT 
+                        ri.staging_id,
+                        ri.track_id,
+                        ri.finding_source
+                    FROM staging_report_ids ri 
+                    JOIN report r ON r.upload_id = ri.upload_id
+                    WHERE r.right_category_id = :right_category_id
+                    AND r.right_usage_type_id = :right_usage_type_id
+                    AND r.report_year = :year
+                    AND r.report_month BETWEEN :month_from AND :month_to
+                    {labels_condition}
+                ),
+                candidates_with_rights AS (
+                    -- Шаг 2: Сразу вытаскиваем права для кандидатов и схлопываем дубли правообладателей по MAX
+                    SELECT 
+                        c.staging_id,
+                        c.track_id,
+                        c.finding_source,
+                        tr.right_holder_id,
+                        tr.right_category_id,
+                        MAX(tr.share_percentage) AS max_share_percentage
+                    FROM raw_candidates c
+                    INNER JOIN track_right tr ON tr.track_id = c.track_id
+                        AND tr.right_usage_type_id = :right_usage_type_id
+                        AND tr.right_category_id {category_filter}
+                    GROUP BY c.staging_id, c.track_id, c.finding_source, tr.right_holder_id, tr.right_category_id
+                ),
+                track_weights AS (
+                    -- Шаг 3: Считаем суммарный вес каждого трека-кандидата внутри staging_id
+                    SELECT 
+                        staging_id,
+                        track_id,
+                        finding_source,
+                        SUM(max_share_percentage) AS total_track_share
+                    FROM candidates_with_rights
+                    GROUP BY staging_id, track_id, finding_source
+                ),
+                best_track_per_staging AS (
+                    -- Шаг 4: ГАРАНТИЯ ЧИСТОТЫ. Оставляем СТРОГО ОДИН лучший трек для каждого staging_id
+                    SELECT staging_id, track_id
+                    FROM (
+                        SELECT 
+                            staging_id,
+                            track_id,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY staging_id 
+                                ORDER BY 
+                                    CASE 
+                                        WHEN finding_source = 1 THEN 1 -- Точный ISRC
+                                        WHEN finding_source = 2 THEN 2 -- Код лейбла
+                                        WHEN finding_source = 3 THEN 3 -- Нечеткий (Автор)
+                                        WHEN finding_source = 4 THEN 4 -- Нечеткий (Артист)
+                                        ELSE 5
+                                    END ASC,
+                                    total_track_share DESC, -- Если источники равны, побеждает тот, у кого больше долей прав
+                                    track_id ASC
+                            ) AS rn
+                        FROM track_weights
+                    ) t
+                    WHERE rn = 1 -- Все остальные альтернативные треки здесь уничтожаются
+                )
+                -- Шаг 5: Записываем в кэш права ТОЛЬКО для одного трека-победителя
+                SELECT 
+                    :year, :month_from, :month_to,
+                    b.staging_id, cr.track_id, cr.right_holder_id, cr.right_category_id, :right_usage_type_id, 
+                    cr.max_share_percentage
+                FROM best_track_per_staging b
+                INNER JOIN candidates_with_rights cr 
+                    ON cr.staging_id = b.staging_id AND cr.track_id = b.track_id;
+            
+            """)
+            
+            query_params = {
+                "right_category_id": right_category_id,
+                "right_usage_type_id": right_usage_type_id,
+                "year": year,
+                "month_from": month_from,
+                "month_to": month_to,
+                "both_category_id": RightCategory.BOTH
+            }
+            if labels:
+                query_params.update(labels_params)
+
+            conn.execute(cache_rights_query, query_params)
+            print("👁️ Права успешно заморожены в таблице `report_track_rights_cache`.")
+
+
+
+            # выбрать лучшие права для каждого staging_id 
+
+            query_distributed = text(f"""
+                INSERT INTO report_distribution (
+                    report_id, track_id, right_holder_id, 
+                    report_year, report_month, right_category_id, right_usage_type_id, 
+                    source_payout_amount, share_percentage, coef, 
+                    distributed_amount, not_distributed_amount
+                )
+                SELECT
+                    r.id AS report_id,
+                    rcache.track_id,
+                    rcache.right_holder_id,
+                    r.report_year,
+                    r.report_month,
+                    rcache.right_category_id,
+                    rcache.right_usage_type_id,
+                    ri.payout_amount AS source_payout_amount,
+                    rcache.share_percentage,
+                    CASE WHEN r.right_category_id = :both_category_id THEN 0.50 ELSE 1.00 END AS coef,
+                    (ri.payout_amount * (CASE WHEN r.right_category_id = :both_category_id THEN 0.50 ELSE 1.00 END) * (rcache.share_percentage / 100.0)) AS distributed_amount,
+                    0.0000 AS not_distributed_amount
+                FROM staging_report_agg ri 
+                JOIN report r ON r.upload_id = ri.upload_id
+                -- Просто джойнимся к кэшу напрямую по staging_id. Там уже чистота и порядок!
+                INNER JOIN report_track_rights_cache rcache ON 
+                    rcache.staging_id = ri.id  
+                    AND rcache.right_usage_type_id = r.right_usage_type_id    
+                    AND rcache.report_year = :year
+                    AND rcache.month_from = :month_from
+                    AND rcache.month_to = :month_to
+                    AND ((r.right_category_id = :both_category_id AND rcache.right_category_id IN (1, 2))
+                            OR (r.right_category_id != :both_category_id AND rcache.right_category_id = r.right_category_id))
+                WHERE r.right_category_id = :right_category_id
+                AND r.right_usage_type_id = :right_usage_type_id
+                AND r.report_year = :year
+                AND r.report_month BETWEEN :month_from AND :month_to
+                {labels_condition};
+            """)
+            result = conn.execute(query_distributed, query_params)
+            rows_inserted = result.rowcount
+            print(f"✅ Расчет distributed завершен . Записано строк: {rows_inserted}")
+  
+           
+            print(f"✅ Расчет not_distributed завершен. Записано строк: {rows_inserted}")
+                    
+        return {"status": "success", "rows_inserted": rows_inserted}
+
+    except Exception as e:
+        print(f"❌ Ошибка вычислений: {str(e)}")
         return {"status": "error", "message": str(e)}

@@ -11,7 +11,7 @@ from tasks.report_tasks import (
     process_report_file,
     insert_data_into_final_report_table, group_report_data, find_lost_track,
     process_full_report_pipeline, normalize_person_data, normalize_staging_report_agg, normalize_data,
-    export_report_to_excel, create_report_task
+    export_report_to_excel, create_report_task, calculate_and_save_distribution_sql
 )
 
 router = APIRouter()
@@ -441,4 +441,57 @@ async def create_report(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка при запуске создания отчёта: {str(e)}")
+
+
+@router.post("/calculate_and_save_distribution")
+async def calculate_and_save_distribution_endpoint(
+    year: int = Form(...),
+    month_from: int = Form(..., ge=1, le=12),
+    month_to: int = Form(..., ge=1, le=12),
+    right_category_id: int = Form(...),
+    right_usage_type_id: int = Form(...),
+    label_ids: str = Form(default=""),
+):
+    """
+    Расчет распределения выплат по правообладателям напрямую в SQL.
+    
+    Параметры:
+    - year: год отчёта
+    - month_from: начальный месяц (1-12)
+    - month_to: конечный месяц (1-12)
+    - right_category_id: ID категории прав
+    - right_usage_type_id: ID типа использования прав
+    - label_ids: список ID лейблов через запятую (если пусто, то все лейблы)
+    """
+    try:
+        # Преобразование label_ids из строки в список
+        labels_list = None
+        if label_ids and label_ids.strip():
+            try:
+                labels_list = [int(lid.strip()) for lid in label_ids.split(",") if lid.strip()]
+            except ValueError:
+                raise HTTPException(status_code=400, detail="label_ids должны быть числами через запятую")
+
+        from celery import current_task
+        task_id = current_task.request.id if current_task else None
+
+        task_result = calculate_and_save_distribution_sql.delay(
+            task_id, year, month_from, month_to, right_category_id, right_usage_type_id, labels_list
+        )
+        return {
+            "message": "Задача расчета распределения запущена",
+            "task_id": task_result.id,
+            "params": {
+                "year": year,
+                "month_from": month_from,
+                "month_to": month_to,
+                "right_category_id": right_category_id,
+                "right_usage_type_id": right_usage_type_id,
+                "label_ids": labels_list if labels_list else "все лейблы"
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка при запуске расчета распределения: {str(e)}")
 

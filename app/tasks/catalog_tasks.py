@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, text
 from core.celery_app import celery_app
 from celery import current_task
 from .utils import clean_null_bytes
+from core.constants import RightCategory, RightUsageType
 
 from services.broadcaster import TaskProgress
 
