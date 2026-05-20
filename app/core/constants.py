@@ -27,5 +27,6 @@ class FindingSource:
     NAME_AUTHOR_NORM = 7
     NAME_ARTIST_NORM_PARTLY = 8
     NAME_AUTHOR_NORM_PARTLY = 9
+    ISRC__LABEL_CODE = 10 
    
   
