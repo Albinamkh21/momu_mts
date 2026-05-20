@@ -11,7 +11,11 @@ from celery import current_task
 from .utils import clean_null_bytes
 from core.constants import RightCategory, RightUsageType
 
+import services
+print("Содержимое модуля services:", dir(services))
+
 from services.broadcaster import TaskProgress
+from services.csv_writer import BaseCSVWriter, TomeWriter
 
 
 
@@ -339,103 +343,91 @@ import os
 import csv
 from datetime import datetime
 from sqlalchemy import text
-# Убедись, что импортируешь engine, TaskProgress, celery_app и т.д.
+
 
 @celery_app.task(name="export_normalized_catalog_to_flat", bind=True)
-def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: int = None, right_usage_type_id: int = None):
+def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: int = None, right_usage_type_id: int = None, export_format: str = None):
     task_id = self.request.id
-    TaskProgress.emit(task_id, f"✅ Начало выгрузки каталога. Фильтр по label_id: {label_id}, right_usage_type_id: {right_usage_type_id}")
-    print(f"DEBUG: Task started task_id={task_id}, label_id={label_id}, right_usage_type_id={right_usage_type_id}")
+    TaskProgress.emit(task_id, f"✅ Начало выгрузки ({export_format}).")
 
-    # Условие фильтрации. Убрали LIMIT, чтобы выгружался весь объем
-    where_parts = []
-    params = {}
+    # 1. Фабрика запросов
+    query_default = f"""
+
+        SELECT
+
+            track_id
+            upc, isrc, track_name,  
+
+            artist_name, track_artist_name,  composer, lyricist, authors
+            label_id
+
+
+           
+
+        FROM mv_track_extended
+
+       
+
+    """
+    queries = {
+        "default": query_default,
+        "separate_by_rights": "SELECT * FROM mv_catalog_rights_split",
+        "100plus100": "SELECT * FROM mv_catalog_100plus"
+    }
+    base_query = queries.get(export_format, queries["default"])
+    
+    # 2. Фильтры
+    where_parts, params = [], {}
     if label_id:
         where_parts.append("label_id = :label_id")
         params["label_id"] = label_id
-
-    # Если передан right_usage_type_id — фильтруем по трекам, у которых есть запись в track_right
     if right_usage_type_id:
-        where_parts.append("track_id IN (SELECT track_id FROM track_right WHERE right_usage_type_id = :rut_id and share_percentage > 0) ")
+        where_parts.append("track_id IN (SELECT track_id FROM track_right WHERE right_usage_type_id = :rut_id and share_percentage > 0)")
         params["rut_id"] = right_usage_type_id
 
     where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
-    
-    # Максимально простой и быстрый запрос к материализованному представлению
-    query = f"""
-        SELECT 
-            upc, isrc, track_name, genre_name, album_name,
-            track_number, artist_name, track_artist_name,
-            composer, lyricist, authors, explicit, duration,
-            label_name, right_id, 
-            author_right_int, author_right_mob, author_right_pub, ar_label_treaty_number,
-            related_right_id_int, related_right_id_mob, related_right_id_pub, rr_label_treaty_number
-        FROM mv_catalog_flat
-        {where_clause}
-        ORDER BY track_id; 
-    """
+    query = f"{base_query} {where_clause} ORDER BY track_id;"
 
-    # Путь сохранения. Меняем расширение на .csv
     storage_dir = output_path or "/app/storage"
     os.makedirs(storage_dir, exist_ok=True)
-    filename = f"catalog_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    full_path = os.path.join(storage_dir, filename)
+    base_filename = f"catalog_{export_format}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
+    # 3. Выполнение и запись
+    total_rows = 0
+    CHUNK_SIZE = 100000
     try:
-        total_rows = 0
-        CHUNK_SIZE = 10000  # Выгружаем и пишем блоками по 10 тыс. строк
-
         with engine.connect() as conn:
-                    # Настройка параметров запроса
-                    # params сформированы выше
-            
-                    # Включаем stream_results, чтобы база не выплевывала миллион строк в память разом
             result = conn.execution_options(stream_results=True).execute(text(query), params)
-            
-            # Открываем файл для потоковой записи
-            # Разделитель ';' выбран специально, чтобы Excel корректно открывал CSV в русской локали, 
-            # и чтобы запятые в колонке authors не ломали структуру файла.
-            with open(full_path, mode='w', encoding='utf-8-sig', newline='') as csv_file:
-                writer = csv.writer(csv_file, delimiter=';', quoting=csv.QUOTE_MINIMAL)
+            headers = result.keys()
+
+            full_writer = BaseCSVWriter(os.path.join(storage_dir, f"{base_filename}_full.csv"), headers)
+            tome_writer = TomeWriter(base_filename, storage_dir, headers)
+
+            while True:
+                chunk = result.fetchmany(CHUNK_SIZE)
+                if not chunk: break
                 
-                # Записываем заголовки колонок из результата
-                headers = result.keys()
-                writer.writerow(headers)
+                full_writer.write_rows(chunk)
+                tome_writer.write_rows(chunk)
+                
+                total_rows += len(chunk)
+                if total_rows % 50000 == 0:
+                    TaskProgress.emit(task_id, f"⏳ Выгружено {total_rows} строк...")
 
-                # Читаем данные чанками и сразу пишем на диск
-                while True:
-                    chunk = result.fetchmany(CHUNK_SIZE)
-                    if not chunk:
-                        break  # Данные закончились
-                    
-                    writer.writerows(chunk)
-                    total_rows += len(chunk)
-                    
-                    # Сообщаем о прогрессе каждые 50 тыс. строк
-                    if total_rows % 50000 == 0:
-                        TaskProgress.emit(task_id, f"⏳ Выгружено {total_rows} строк...")
+            full_writer.close()
+            tome_writer.close()
 
-        # Если цикл прошел, а строк 0
         if total_rows == 0:
-            TaskProgress.emit(task_id, "❌ Нет данных для выгрузки (0 строк).", level="error")
-            import time
-            time.sleep(1.0)
-            
-            # Удаляем пустой файл, чтобы не засорять диск
-            if os.path.exists(full_path):
-                os.remove(full_path)
-                
-            TaskProgress.emit(task_id, "❌ Нет данных для выгрузки (0 строк).")
-            return {"status": "success", "message": "Нет данных для выгрузки"}
+            return {"status": "success", "message": "Нет данных"}
 
-        # Успешное завершение
-        TaskProgress.emit(task_id, f"✅ Файл успешно сохранен: {full_path}. Всего строк: {total_rows}")
-        return {"status": "success", "rows_exported": total_rows, "path": full_path}
+        TaskProgress.emit(task_id, f"✅ Успешно: {total_rows} строк.")
+        return {"status": "success", "rows_exported": total_rows}
 
     except Exception as e:
-        print(f"❌ Ошибка экспорта: {e}")
-        TaskProgress.emit(task_id, f"❌ Ошибка экспорта: {e}")
+        TaskProgress.emit(task_id, f"❌ Ошибка: {e}", level="error")
         return {"status": "error", "message": str(e)}
+
+
 
 
 @celery_app.task(name="delete_data_from_all_dictionaries_by_label", bind=True)

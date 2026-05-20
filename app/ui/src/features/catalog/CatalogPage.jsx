@@ -13,6 +13,7 @@ export function CatalogPage() {
   const [users, setUsers] = useState([]);
   const [userId, setUserId] = useState('');
   const [rightUsageTypeId, setRightUsageTypeId] = useState('');
+  const [exportFormat, setExportFormat] = useState('');
   const [message, setMessage] = useState('');
   const fileInputRef = useRef();
   const [activeTaskId, setActiveTaskId] = useState(null);
@@ -68,7 +69,7 @@ export function CatalogPage() {
     setActiveTaskId(null);
 
     try {
-      const res = await downloadCatalogWithUsage(labelId, rightUsageTypeId);
+      const res = await downloadCatalogWithUsage(labelId, rightUsageTypeId, exportFormat === '' ? null : exportFormat);
       if (res.task_id) {
         setActiveTaskId(res.task_id);
         setMessage('⚙️ Файл формируется. Логи ниже...');
@@ -169,11 +170,23 @@ export function CatalogPage() {
             <option value="">Все доступные лейблы</option>
             {labels.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
           </select>
+        </div>
+        <div className="form-group">
           <label className="form-label">Тип использования:</label>
           <select value={rightUsageTypeId} onChange={e => setRightUsageTypeId(e.target.value)} className="form-control">
             <option value="">Все типы</option>
             {usageTypes.map(u => <option key={u.id} value={u.id}>{u.label || u.code}</option>)}
           </select>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Формат выгрузки:</label>
+          <select value={exportFormat} onChange={e => setExportFormat(e.target.value)} className="form-control">
+            <option value="default">Основной формат (по умолчанию)</option>
+            <option value="separate_by_rights">Отдельные каталоги по Авторские/Смежные</option>
+            <option value="100plus100">100+100</option>
+          </select>
+        </div>
+        <div className="form-group">
           <button type="submit" disabled={downloadLoading} className="btn btn-primary">
             {downloadLoading ? 'Сборка...' : 'Скачать Excel'}
           </button>

@@ -19,10 +19,11 @@ export const downloadCatalog = async (label_id) => {
   return data;
 };
 
-export const downloadCatalogWithUsage = async (label_id, right_usage_type_id) => {
+export const downloadCatalogWithUsage = async (label_id, right_usage_type_id, export_format) => {
   const payload = {};
   if (label_id) payload.label_id = parseInt(label_id);
   if (right_usage_type_id) payload.right_usage_type_id = parseInt(right_usage_type_id);
+  if (export_format) payload.export_format = export_format;
   console.log("DEBUG: downloadCatalogWithUsage payload:", payload);
   const { data } = await httpClient.post('/v1/catalog/download', payload);
   return data;

@@ -12,6 +12,7 @@ STORAGE_DIR = "/app/storage"
 class DownloadRequest(BaseModel):
     label_id: int | None = None
     right_usage_type_id: int | None = None
+    export_format: str | None = None
 
 @router.post("/upload")
 async def upload_catalog(file: UploadFile = File(...)):
@@ -80,6 +81,7 @@ async def download_catalog(request: DownloadRequest):
         "/app/storage",
         request.label_id,
         request.right_usage_type_id,
+        request.export_format
     )
 
     return {
@@ -87,6 +89,7 @@ async def download_catalog(request: DownloadRequest):
         "task_id": task_result.id,
         "label_id": request.label_id,
         "right_usage_type_id": request.right_usage_type_id,
+        "export_format": request.export_format
     }
 
 
