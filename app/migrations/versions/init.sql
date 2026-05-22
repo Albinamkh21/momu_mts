@@ -620,3 +620,41 @@ CREATE TABLE report (
     upload_id TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+
+
+CREATE TABLE report_track_rights_cache (
+    id SERIAL PRIMARY KEY,
+    report_id integer,
+    right_category_id integer NOT NULL,
+    right_usage_type_id integer NOT NULL,
+    track_id integer NOT NULL,
+    right_holder_id integer NOT NULL,
+    share_percentage numeric(5,2) NOT NULL,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    staging_id integer,
+    
+    
+    -- Определение внешних ключей (Foreign Keys)
+    CONSTRAINT fk_report FOREIGN KEY (report_id) 
+        REFERENCES report (id) ON DELETE CASCADE,
+        
+    CONSTRAINT fk_right_category FOREIGN KEY (right_category_id) 
+        REFERENCES right_category (id),
+        
+    CONSTRAINT fk_right_usage_type FOREIGN KEY (right_usage_type_id) 
+        REFERENCES right_usage_type (id),
+        
+    CONSTRAINT fk_track FOREIGN KEY (track_id) 
+        REFERENCES track (id),
+        
+    CONSTRAINT fk_right_holder FOREIGN KEY (right_holder_id) 
+        REFERENCES right_holder (id),
+        
+    CONSTRAINT fk_staging_report FOREIGN KEY (staging_id) 
+        REFERENCES staging_report_agg (id) ON DELETE SET NULL
+);
+
+-- 3. Создаем индексы для ускорения поиска по внешним ключам (рекомендуется)
+CREATE INDEX idx_report_track_rights_report_id ON report_track_rights_cache(report_id);
+CREATE INDEX idx_report_track_rights_track_id ON  report_track_rights_cache(track_id);

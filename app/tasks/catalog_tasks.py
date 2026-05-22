@@ -11,11 +11,9 @@ from celery import current_task
 from .utils import clean_null_bytes
 from core.constants import RightCategory, RightUsageType
 
-import services
-print("Содержимое модуля services:", dir(services))
-
 from services.broadcaster import TaskProgress
-from services.csv_writer import BaseCSVWriter, TomeWriter
+from services.csv_writer import BaseCSVWriter, TomeExcelWriter, TomeWriterFactory
+import xlsxwriter
 
 
 
@@ -351,71 +349,150 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
     TaskProgress.emit(task_id, f"✅ Начало выгрузки ({export_format}).")
 
     # 1. Фабрика запросов
-    query_default = f"""
-
-        SELECT
-
-            track_id
-            upc, isrc, track_name,  
-
-            artist_name, track_artist_name,  composer, lyricist, authors
-            label_id
-
-
-           
-
-        FROM mv_track_extended
-
-       
+    from_default = f"""
+        
+        
+        mv_track_extended t
+        JOIN track_right tr ON tr.track_id = t.track_id
+        JOIN right_holder rh ON rh.id = tr.right_holder_id
+        JOIN label l ON l.id = rh.label_id
 
     """
-    queries = {
-        "default": query_default,
-        "separate_by_rights": "SELECT * FROM mv_catalog_rights_split",
+    # 1. Списки колонок для разных форматов и типов прав
+    fields_default = f""" t.track_id, t.label_own_code, t.upc, t.isrc, t.track_name, t.artist_name, t.composer, t.lyricist, t.authors,
+            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.INT} THEN tr.share_percentage ELSE 0 END) AS INT,
+
+            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.MOB} THEN tr.share_percentage ELSE 0 END) AS MOB,
+
+            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.PUB} THEN tr.share_percentage ELSE 0 END) AS PUB,
+            l.name AS copyright_holder
+
+    """
+    
+
+    fields_related = f""" t.track_id, t.label_own_code, t.upc, t.isrc, t.track_name, t.artist_name,  t.authors, t.composer, t.lyricist, t.album_name,
+            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.INT} THEN tr.share_percentage ELSE 0 END) AS INT,
+
+            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.MOB} THEN tr.share_percentage ELSE 0 END) AS MOB,
+
+            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.PUB} THEN tr.share_percentage ELSE 0 END) AS PUB,
+            l.name AS copyright_holder """
+
+    fields_author = f""" t.track_id, t.label_own_code, t.track_name, t.artist_name,  t.authors, t.composer, t.lyricist, 
+            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.INT} THEN tr.share_percentage ELSE 0 END) AS INT,
+
+            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.MOB} THEN tr.share_percentage ELSE 0 END) AS MOB,
+
+            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.PUB} THEN tr.share_percentage ELSE 0 END) AS PUB,
+            l.name AS copyright_holder """
+                    
+
+    
+   
+    fields_100plus = f"{fields_related}, {fields_author}"
+
+
+    # Словарь фабрики: теперь вместо готовых запросов мы храним структуру полей
+    fields_factory = {
+        "default": {"default": fields_default},
+        "100plus100": {"default": fields_100plus},
+        "separate_by_rights": {
+            "_author": fields_author,
+            "_related": fields_related
+        }
+    }
+    queries_from = {
+        "default": from_default,
+        "separate_by_rights": from_default,
         "100plus100": "SELECT * FROM mv_catalog_100plus"
     }
-    base_query = queries.get(export_format, queries["default"])
-    
-    # 2. Фильтры
-    where_parts, params = [], {}
-    if label_id:
-        where_parts.append("label_id = :label_id")
-        params["label_id"] = label_id
-    if right_usage_type_id:
-        where_parts.append("track_id IN (SELECT track_id FROM track_right WHERE right_usage_type_id = :rut_id and share_percentage > 0)")
-        params["rut_id"] = right_usage_type_id
+    group_clause = {
+        "default": " GROUP BY  t.track_id,  t.upc, t.isrc, t.track_name, t.artist_name, t.composer, t.lyricist, t.authors, l.name, l.id ",
+        "separate_by_rights": " GROUP BY  t.track_id, t.label_own_code, t.upc, t.isrc, t.track_name, t.artist_name,  t.authors, t.composer, t.lyricist, t.album_name, l.name, l.id ",
+        "100plus100": "SELECT * FROM mv_catalog_100plus"
+    }
 
-    where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
-    query = f"{base_query} {where_clause} ORDER BY track_id;"
+    base_query = queries_from.get(export_format, queries_from["default"])
+    
+   # 2. Фильтры (БАЗОВЫЕ)
+    where_parts_base, params_base = [], {}
+    if label_id:
+        where_parts_base.append("l.id = :label_id")
+        params_base["label_id"] = label_id
+    if right_usage_type_id:
+        where_parts_base.append(" (tr.right_usage_type_id = :rut_id and share_percentage > 0 )")
+        params_base["rut_id"] = right_usage_type_id
+
+    
+    # Конфигурация проходов и суффиксов для полей
+    if export_format == "separate_by_rights":
+        passes = [
+            {"suffix": "_author", "field_key": "_author", "cat_id": RightCategory.AUTHOR, "msg": "авторские"},
+            {"suffix": "_related", "field_key": "_related", "cat_id": RightCategory.RELATED, "msg": "смежные"}
+        ]
+    else:
+        passes = [{"suffix": "", "field_key": "default", "cat_id": None, "msg": ""}]
+
+    #where_clause = f"WHERE {' AND '.join(where_parts_base)}" if where_parts_base else ""
+    #query = f"{base_query} {where_clause} ORDER BY track_id;"
 
     storage_dir = output_path or "/app/storage"
     os.makedirs(storage_dir, exist_ok=True)
-    base_filename = f"catalog_{export_format}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-    # 3. Выполнение и запись
     total_rows = 0
     CHUNK_SIZE = 100000
+
+    # 3. Выполнение и запись
     try:
         with engine.connect() as conn:
-            result = conn.execution_options(stream_results=True).execute(text(query), params)
-            headers = result.keys()
-
-            full_writer = BaseCSVWriter(os.path.join(storage_dir, f"{base_filename}_full.csv"), headers)
-            tome_writer = TomeWriter(base_filename, storage_dir, headers)
-
-            while True:
-                chunk = result.fetchmany(CHUNK_SIZE)
-                if not chunk: break
+            for p in passes:
+                # Копируем базовые фильтры под текущий проход
+                where_parts = where_parts_base.copy()
+                params = params_base.copy()
                 
-                full_writer.write_rows(chunk)
-                tome_writer.write_rows(chunk)
-                
-                total_rows += len(chunk)
-                if total_rows % 50000 == 0:
-                    TaskProgress.emit(task_id, f"⏳ Выгружено {total_rows} строк...")
+                # Если это раздельный проход, добавляем фильтр по категории прав
+                if p["cat_id"] is not None:
+                    TaskProgress.emit(task_id, f"⏳ Запуск прохода: {p['msg']} права...")
+                    where_parts.append(" ( tr.right_category_id = :cat_id and share_percentage > 0)")
+                    params["cat_id"] = p["cat_id"]
 
-            full_writer.close()
-            tome_writer.close()
+
+                # Динамически определяем список полей для текущего формата и прохода
+                format_fields = fields_factory.get(export_format, fields_factory["default"])
+                current_fields = format_fields.get(p["field_key"], format_fields.get("default"))
+
+              
+
+                # Собираем финальный SQL
+                where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+                query = f""" SELECT {current_fields} FROM {queries_from.get(export_format, queries_from['default'])} {where_clause}
+                        {group_clause.get(export_format, group_clause['default'])} 
+                        ORDER BY l.id, t.track_id; """
+
+
+
+                base_filename = f"catalog_{export_format}_{p['suffix']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+                # Выполнение запроса
+                result = conn.execution_options(stream_results=True).execute(text(query), params)
+                headers = result.keys()
+
+                full_writer = BaseCSVWriter(os.path.join(storage_dir, f"{base_filename}_full.csv"), headers)
+                tome_writer = TomeWriterFactory.create("xlsx", base_filename, storage_dir, headers, max_rows=CHUNK_SIZE * 5)
+
+                while True:
+                    chunk = result.fetchmany(CHUNK_SIZE)
+                    if not chunk: 
+                        break
+                    
+                    full_writer.write_rows(chunk)
+                    tome_writer.write_rows(chunk)
+                    
+                    total_rows += len(chunk)
+                    if total_rows % 50000 == 0:
+                        TaskProgress.emit(task_id, f"⏳ Выгружено {total_rows} строк...")
+
+                full_writer.close()
+                tome_writer.close()
 
         if total_rows == 0:
             return {"status": "success", "message": "Нет данных"}
