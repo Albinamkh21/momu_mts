@@ -3,7 +3,7 @@ import polars as pl
 from sqlalchemy import create_engine, text
 from core.celery_app import celery_app
 from celery import current_task
-from core.constants import RightCategory, FindingSource
+from core.constants import RightCategory, FindingSource, RightUsageType
 from .utils import clean_null_bytes
 from services.broadcaster import TaskProgress
 import uuid
@@ -1295,6 +1295,16 @@ def _cleanup_staging_report_tables(conn, upload_id: str, report_parameters: dict
     print(f"🧹 Стейджинг report очищен для сессии {upload_id} ({elapsed:.1f} сек)")
     TaskProgress.emit(getattr(current_task.request, 'id', None), f"🧹 Стейджинг report очищен для сессии {upload_id} ({elapsed:.1f} сек)")
 
+    t0 = time.time()
+    conn.execute(
+        text(f"DELETE FROM staging_report_ids WHERE upload_id = :uid"),
+        {"uid": upload_id}
+    )
+  
+    elapsed = time.time() - t0
+    print(f"🧹 Стейджинг report_ids очищен для сессии {upload_id} ({elapsed:.1f} сек)")
+    TaskProgress.emit(getattr(current_task.request, 'id', None), f"🧹 Стейджинг report_ids очищен для сессии {upload_id} ({elapsed:.1f} сек)")
+
 
 
 
@@ -1827,7 +1837,7 @@ def calculate_and_save_tracks_rights(connection,
                     tr.right_holder_id,
                     tr.right_category_id,
                     tr.right_usage_type_id,
-                    MAX(tr.share_percentage) AS max_share_percentage
+                    COALESCE(MAX(tr.share_percentage), 0) AS max_share_percentage
                 FROM raw_candidates c
                 INNER JOIN track_right tr ON tr.track_id = c.track_id
                 WHERE tr.right_usage_type_id = :right_usage_type_id
@@ -1947,6 +1957,13 @@ def export_report_distribution_to_excel(
         else:
             category_filter = f"= {right_category_id}"
 
+        if right_usage_type_id == RightUsageType.ALL:    
+            usage_filter = f"IN ({RightUsageType.PUB}, {RightUsageType.INT}, {RightUsageType.MOB})"
+        else:
+            usage_filter = f"= {right_usage_type_id}"
+    
+            
+
         try:
             print("📤 Начинаем экспорт сводного отчёта из готовых распределений (report_distribution)...")
             TaskProgress.emit(getattr(current_task.request, 'id', None), "📤 Начинаем экспорт...")
@@ -1975,9 +1992,7 @@ def export_report_distribution_to_excel(
             if labels:
                 query_params.update(labels_params)
 
-            # ---------- 2. Запрос базовых данных (уже привязанных к report_distribution) ----------
-            # Используем DISTINCT, чтобы получить 1 строку на 1 report_id, так как 
-            # payout_amount дублируется в distribution для разных ПО.
+            # ---------- 2. Запрос базовых данных 
             base_query = text(f"""
                 SELECT DISTINCT
                 
@@ -2008,7 +2023,7 @@ def export_report_distribution_to_excel(
                 WHERE r.report_year = :year
                 AND r.report_month BETWEEN :month_from AND :month_to
                 AND r.right_category_id = :right_category_id
-                AND r.right_usage_type_id = :right_usage_type_id
+                AND r.right_usage_type_id {usage_filter}
                 {labels_condition_base}
                 GROUP BY ra.id, ra.label_own_code, ra.isrc, ra.track_name, ra.artist_name, ra.authors, ra.play_count, ra.payout_amount, ra.price_per_play
             
@@ -2061,18 +2076,35 @@ def export_report_distribution_to_excel(
                     WHERE r.report_year = :year
                     AND r.report_month BETWEEN :month_from AND :month_to
                     AND r.right_category_id = :right_category_id
-                    AND r.right_usage_type_id = :right_usage_type_id
+                    AND r.right_usage_type_id {usage_filter}
                     AND ra.id NOT IN (SELECT staging_id FROM report_track_rights_cache)
              
                 """)
                 df_unclaimed = pl.read_database(unclaimed_query, conn, execute_options={"parameters": query_params})
 
 
+                meta_row = conn.execute(text(f"""
+                    SELECT
+                        -- Склеиваем уникальные имена категорий и типы использования через запятую
+                        string_agg(DISTINCT rc.name, ', ') AS right_category_name,
+                        string_agg(DISTINCT rut.code, ', ') AS right_usage_type_code
+                    FROM right_category rc
+                    JOIN right_usage_type rut ON rut.id { usage_filter }  
+                    WHERE rc.id {category_filter}
+                """), {
+                   
+                    "right_category_id" : right_category_id,
+                    "right_usage_type_id": right_usage_type_id,
+                }).fetchone()
+
+      
+                right_category_name = (meta_row.right_category_name if meta_row and meta_row.right_category_name else str(right_category_ids))
+                right_usage_type_code = (meta_row.right_usage_type_code if meta_row and meta_row.right_usage_type_code else str(right_usage_type_id))
 
                 # 4. Подготовка файла
                 storage_dir = "/app/storage"
                 os.makedirs(storage_dir, exist_ok=True)
-                filename = f"report_{year}_{month_from}_{month_to}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                filename = f"report_{year}_{month_from}_{month_to}_{right_category_name}_{right_usage_type_code}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
                 output_path = os.path.join(storage_dir, filename)
 
                 # 5. Генерация вкладок по лейблам

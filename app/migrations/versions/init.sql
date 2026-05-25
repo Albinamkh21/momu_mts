@@ -658,3 +658,6 @@ CREATE TABLE report_track_rights_cache (
 -- 3. Создаем индексы для ускорения поиска по внешним ключам (рекомендуется)
 CREATE INDEX idx_report_track_rights_report_id ON report_track_rights_cache(report_id);
 CREATE INDEX idx_report_track_rights_track_id ON  report_track_rights_cache(track_id);
+
+
+insert into finding_source values(10, 'ISRC+LABEL_CODE', 'ISRC+LABEL_CODE');

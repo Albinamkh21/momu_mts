@@ -552,7 +552,7 @@ def delete_data_from_all_dictionaries_by_label(self, label_id: int):
 
             # 2. Удаляем report (нет ON DELETE CASCADE)
             r_report = conn.execute(text("""
-                DELETE FROM report WHERE track_id = ANY(:ids)
+                DELETE FROM report_track_rights_cache WHERE track_id = ANY(:ids)
             """), {"ids": orphan_track_ids})
             print(f"✅ report удалено: {r_report.rowcount}")
             TaskProgress.emit(task_id, f"✅ report удалено: {r_report.rowcount}")
@@ -630,7 +630,7 @@ def delete_data_from_all_dictionaries_by_label(self, label_id: int):
 
 
             #обновляем материализованное представление, чтобы не было рассинхрона
-            conn.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_catalog_flat; mv_catalog_flat"))
+            conn.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_catalog_flat; "))
             conn.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_track_extended; "))
             print(f"🏁 Представления обновлены.")
 
