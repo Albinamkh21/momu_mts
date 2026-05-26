@@ -40,3 +40,9 @@ GRANT ALL ON SCHEMA public TO public;
 
 CREATE EXTENSION IF NOT EXISTS citext;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+
+docker exec -i momu_postgres psql -U momu_user -d momu -c "
+    DROP SCHEMA public CASCADE;
+    CREATE SCHEMA public;
+    GRANT ALL ON SCHEMA public TO public;

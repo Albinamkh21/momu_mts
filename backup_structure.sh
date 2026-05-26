@@ -47,6 +47,7 @@ docker exec "$DB_CONTAINER" pg_dump \
     -t label \
     -t right_usage_type \
     -t right_category \
+    -t region \
     --no-owner \
     --no-acl \
     >> "$BACKUP_FILE"

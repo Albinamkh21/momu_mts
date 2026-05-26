@@ -36,12 +36,6 @@ docker exec "$DB_CONTAINER" pg_dump \
     -Fc \
     --no-owner \
     --no-acl \
-    --exclude-table=partners \
-    --exclude-table=finding_source \
-    --exclude-table=label \
-    --exclude-table=right_usage_type \
-    --exclude-table=right_category \
-    --exclude-table=region \
     > "$BACKUP_FILE"
 
 t1=$(date +%s)
