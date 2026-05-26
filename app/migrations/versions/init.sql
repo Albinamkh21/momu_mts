@@ -543,6 +543,9 @@ ALTER TABLE staging_cataloog
     ADD COLUMN track_name_tokens TEXT[];
  
 
+DROP MATERIALIZED VIEW IF EXISTS public.mv_track_extended CASCADE;
+
+
 CREATE MATERIALIZED VIEW mv_track_extended AS
 WITH authors_flat AS (
     SELECT 
@@ -579,7 +582,8 @@ SELECT DISTINCT ON (t.id)
         WHEN t.explicit THEN 'Да'::text 
         ELSE 'Нет'::text 
     END AS explicit,
-    t.duration::text AS duration
+    t.duration::text AS duration,
+    t.created_at::text AS created_at
    
 FROM track t
 LEFT JOIN authors_flat af ON af.track_id = t.id

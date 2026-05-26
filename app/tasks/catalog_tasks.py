@@ -343,21 +343,90 @@ from datetime import datetime
 from sqlalchemy import text
 
 
-@celery_app.task(name="export_normalized_catalog_to_flat", bind=True)
-def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: int = None, right_usage_type_id: int = None, export_format: str = None):
-    task_id = self.request.id
-    TaskProgress.emit(task_id, f"✅ Начало выгрузки ({export_format}).")
-
-    # 1. Фабрика запросов
-    from_default = f"""
-        
-        
+def build_standard_query(fields: str, group_by: str, where_clause: str) -> str:
+    """Генератор для стандартных плоских запросов (default, 100plus100)"""
+    return f"""
+        SELECT {fields} 
+        FROM 
         mv_track_extended t
         JOIN track_right tr ON tr.track_id = t.track_id
         JOIN right_holder rh ON rh.id = tr.right_holder_id
         JOIN label l ON l.id = rh.label_id
-
+        {where_clause}
+        {group_by} 
+        ORDER BY l.id, t.track_id;
     """
+
+def build_unified_rights_query(where_clause: str) -> str:
+    """Генератор для сложного аналитического запроса (separate_by_rights)"""
+    return f"""
+        WITH all_rights AS (
+            SELECT 
+                tr.track_id,
+                t.label_own_code,
+                tr.right_category_id,
+                MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.INT} THEN tr.share_percentage ELSE 0 END) AS r_int,
+                MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.MOB} THEN tr.share_percentage ELSE 0 END) AS r_mob,
+                MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.PUB} THEN tr.share_percentage ELSE 0 END) AS r_pub,
+                string_agg(DISTINCT l.name, ', ') AS holders
+            FROM track_right tr
+            JOIN track t ON t.id = tr.track_id
+            JOIN right_holder rh ON rh.id = tr.right_holder_id
+            JOIN label l ON l.id = rh.label_id
+            WHERE tr.right_category_id IN ({RightCategory.AUTHOR}, {RightCategory.RELATED}) 
+              AND tr.share_percentage > 0
+            GROUP BY tr.track_id, t.label_own_code, tr.right_category_id
+        ),
+        filtered_tracks AS (
+            SELECT DISTINCT t.track_id
+            FROM mv_track_extended t
+            JOIN track_right tr ON tr.track_id = t.track_id
+            JOIN right_holder rh ON rh.id = tr.right_holder_id
+            JOIN label l ON l.id = rh.label_id
+            {where_clause}
+        ),
+        target_tracks AS (
+            SELECT 
+                m.*,
+                CASE WHEN m.label_own_code LIKE '%-%' 
+                     THEN REGEXP_REPLACE(m.label_own_code, '-[A-Za-z0-9]+$', '') 
+                     ELSE NULL 
+                END AS base_code
+            FROM mv_track_extended m
+            JOIN filtered_tracks ft ON ft.track_id = m.track_id
+        )
+        SELECT 
+            t.label_own_code, t.upc, t.isrc, t.track_name,  t.artist_name, t.authors, t.composer, t.lyricist, t.album_name,
+           
+            COALESCE(rel.r_int, 0) AS related_int,
+            COALESCE(rel.r_mob, 0) AS related_mob,
+            COALESCE(rel.r_pub, 0) AS related_pub,
+            rel.holders AS copyright_holder,
+
+            COALESCE(auth_direct.label_own_code, auth_base.label_own_code) AS author_label_own_code,
+            COALESCE(auth_direct.r_int, auth_base.r_int, 0) AS author_int,
+            COALESCE(auth_direct.r_mob, auth_base.r_mob, 0) AS author_mob,
+            COALESCE(auth_direct.r_pub, auth_base.r_pub, 0) AS author_pub,
+            COALESCE(auth_direct.holders, auth_base.holders) AS copyright_holder, TO_CHAR(t.created_at::timestamp, 'DD-MM-YYYY') AS "Time period"
+
+        FROM target_tracks t
+        LEFT JOIN all_rights rel 
+            ON rel.track_id = t.track_id AND rel.right_category_id = {RightCategory.RELATED}
+        LEFT JOIN all_rights auth_direct 
+            ON auth_direct.track_id = t.track_id AND auth_direct.right_category_id = {RightCategory.AUTHOR}
+        LEFT JOIN all_rights auth_base 
+            ON auth_direct.track_id IS NULL AND t.base_code IS NOT NULL 
+           AND auth_base.label_own_code = t.base_code AND auth_base.right_category_id = {RightCategory.AUTHOR}
+        ORDER BY t.label_id, t.track_id;
+    """
+
+@celery_app.task(name="export_normalized_catalog_to_flat", bind=True)
+def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: int = None, right_usage_type_id: int = None, export_format: str = "default"):
+    task_id = self.request.id
+    TaskProgress.emit(task_id, f"✅ Начало выгрузки ({export_format}).")
+    print(f"✅ Начало выгрузки ({export_format}).")
+
+   
     # 1. Списки колонок для разных форматов и типов прав
     fields_default = f""" t.track_id, t.label_own_code, t.upc, t.isrc, t.track_name, t.artist_name, t.composer, t.lyricist, t.authors,
             MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.INT} THEN tr.share_percentage ELSE 0 END) AS INT,
@@ -370,7 +439,7 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
     """
     
 
-    fields_related = f""" t.track_id, t.label_own_code, t.upc, t.isrc, t.track_name, t.artist_name,  t.authors, t.composer, t.lyricist, t.album_name,
+    fields_related = f"""  t.label_own_code , t.upc, t.isrc, t.track_name, t.artist_name,  t.authors, t.composer, t.lyricist, t.album_name,
             MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.INT} THEN tr.share_percentage ELSE 0 END) AS INT,
 
             MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.MOB} THEN tr.share_percentage ELSE 0 END) AS MOB,
@@ -401,18 +470,14 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
             "_related": fields_related
         }
     }
-    queries_from = {
-        "default": from_default,
-        "separate_by_rights": from_default,
-        "100plus100": "SELECT * FROM mv_catalog_100plus"
-    }
+   
     group_clause = {
-        "default": " GROUP BY  t.track_id,  t.upc, t.isrc, t.track_name, t.artist_name, t.composer, t.lyricist, t.authors, l.name, l.id ",
+        "default": " GROUP BY  t.track_id, t.label_own_code, t.upc, t.isrc, t.track_name, t.artist_name, t.composer, t.lyricist, t.authors, l.name, l.id ",
         "separate_by_rights": " GROUP BY  t.track_id, t.label_own_code, t.upc, t.isrc, t.track_name, t.artist_name,  t.authors, t.composer, t.lyricist, t.album_name, l.name, l.id ",
         "100plus100": "SELECT * FROM mv_catalog_100plus"
     }
 
-    base_query = queries_from.get(export_format, queries_from["default"])
+  
     
    # 2. Фильтры (БАЗОВЫЕ)
     where_parts_base, params_base = [], {}
@@ -464,9 +529,7 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
 
                 # Собираем финальный SQL
                 where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
-                query = f""" SELECT {current_fields} FROM {queries_from.get(export_format, queries_from['default'])} {where_clause}
-                        {group_clause.get(export_format, group_clause['default'])} 
-                        ORDER BY l.id, t.track_id; """
+                query = build_standard_query(current_fields, group_clause.get(export_format, "default"), where_clause) if export_format != "100plus100" else build_unified_rights_query(where_clause)
 
 
 
@@ -476,7 +539,7 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
                 result = conn.execution_options(stream_results=True).execute(text(query), params)
                 headers = result.keys()
 
-                full_writer = BaseCSVWriter(os.path.join(storage_dir, f"{base_filename}_full.csv"), headers)
+                #full_writer = BaseCSVWriter(os.path.join(storage_dir, f"{base_filename}_full.csv"), headers)
                 tome_writer = TomeWriterFactory.create("xlsx", base_filename, storage_dir, headers, max_rows=CHUNK_SIZE * 5)
 
                 while True:
@@ -484,14 +547,14 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
                     if not chunk: 
                         break
                     
-                    full_writer.write_rows(chunk)
+                    #full_writer.write_rows(chunk)
                     tome_writer.write_rows(chunk)
                     
                     total_rows += len(chunk)
                     if total_rows % 50000 == 0:
                         TaskProgress.emit(task_id, f"⏳ Выгружено {total_rows} строк...")
 
-                full_writer.close()
+                #full_writer.close()
                 tome_writer.close()
 
         if total_rows == 0:
@@ -503,6 +566,8 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
     except Exception as e:
         TaskProgress.emit(task_id, f"❌ Ошибка: {e}", level="error")
         return {"status": "error", "message": str(e)}
+
+
 
 
 
