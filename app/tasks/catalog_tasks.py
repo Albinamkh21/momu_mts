@@ -423,6 +423,9 @@ def build_unified_rights_query(where_clause: str) -> str:
 @celery_app.task(name="export_normalized_catalog_to_flat", bind=True)
 def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: int = None, right_usage_type_id: int = None, export_format: str = "default"):
     task_id = self.request.id
+
+    if not export_format:
+        export_format = "default"
     TaskProgress.emit(task_id, f"✅ Начало выгрузки ({export_format}).")
     print(f"✅ Начало выгрузки ({export_format}).")
 
@@ -529,7 +532,7 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
 
                 # Собираем финальный SQL
                 where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
-                query = build_standard_query(current_fields, group_clause.get(export_format, "default"), where_clause) if export_format != "100plus100" else build_unified_rights_query(where_clause)
+                query = build_standard_query(current_fields, group_clause.get(export_format, ""), where_clause) if export_format != "100plus100" else build_unified_rights_query(where_clause)
 
 
 
