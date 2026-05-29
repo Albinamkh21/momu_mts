@@ -19,3 +19,7 @@ openpyxl
 
 watchfiles
 aioredis
+
+alembic
+sqlacodegen
+psycopg2-binary

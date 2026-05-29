@@ -35,11 +35,17 @@ DROP SCHEMA public CASCADE;
 CREATE SCHEMA public;
 
 -- 3. Восстанавливаем права доступа (важно для PostgreSQL)
-GRANT ALL ON SCHEMA public TO postgres;
+GRANT ALL ON SCHEMA public TO momu_user;
 GRANT ALL ON SCHEMA public TO public;
 
 CREATE EXTENSION IF NOT EXISTS citext;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+CREATE TABLE public.alembic_version (
+    version_num VARCHAR(32) NOT NULL,
+    CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
+);
 
 
 docker exec -i momu_postgres psql -U momu_user -d momu -c "

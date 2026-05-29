@@ -174,7 +174,7 @@ export function CatalogPage() {
         <div className="form-group">
           <label className="form-label">Тип использования:</label>
           <select value={rightUsageTypeId} onChange={e => setRightUsageTypeId(e.target.value)} className="form-control">
-            <option value="">Все типы</option>
+          
             {usageTypes.map(u => <option key={u.id} value={u.id}>{u.label || u.code}</option>)}
           </select>
         </div>

@@ -2011,10 +2011,12 @@ def export_report_distribution_to_excel(
                 MAX(t.composer) AS "Автор музыки",
                 MAX(t.lyricist) AS "Автор текста",
                 MAX(t.authors) AS "Авторы",
+
                
                 ra.play_count AS "Кол-во прослушиваний",
                 ra.payout_amount AS "Сумма выплат",
-                ra.price_per_play AS "Цена за прослушивание"
+                ra.price_per_play AS "Цена за прослушивание",
+                ra.service_name AS "Сервис"
 
                 FROM staging_report_agg ra
                 JOIN report r ON r.upload_id = ra.upload_id

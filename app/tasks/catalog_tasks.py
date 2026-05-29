@@ -357,8 +357,37 @@ def build_standard_query(fields: str, group_by: str, where_clause: str) -> str:
         ORDER BY l.id, t.track_id;
     """
 
-def build_unified_rights_query(where_clause: str) -> str:
+def build_unified_rights_query(where_clause: str, right_usage_type_id: int = None) -> str:
     """Генератор для сложного аналитического запроса (separate_by_rights)"""
+    
+    right_usage_type_filter = ""    
+    share_percentage_value = 300
+    if right_usage_type_id and right_usage_type_id != RightUsageType.ALL:
+        right_usage_type_filter = " AND sub_tr.right_usage_type_id = :rut_id ";
+        share_percentage_value = 100
+        rel_cols, auth_cols = [], []
+        if right_usage_type_id == RightUsageType.INT:
+            rel_cols.append("COALESCE(rel.r_int, 0) AS related_int")
+            auth_cols.append("COALESCE(auth_direct.r_int, auth_base.r_int, 0) AS author_int")
+        elif right_usage_type_id == RightUsageType.MOB:
+            rel_cols.append("COALESCE(rel.r_mob, 0) AS related_mob")
+            auth_cols.append("COALESCE(auth_direct.r_mob, auth_base.r_mob, 0) AS author_mob")
+        elif right_usage_type_id == RightUsageType.PUB:
+            rel_cols.append("COALESCE(rel.r_pub, 0) AS related_pub")
+            auth_cols.append("COALESCE(auth_direct.r_pub, auth_base.r_pub, 0) AS author_pub")
+        rel_sql = ",\n".join(rel_cols)
+        auth_sql = ",\n".join(auth_cols)
+    else:
+        rel_sql = """COALESCE(rel.r_int, 0) AS related_int,
+            COALESCE(rel.r_mob, 0) AS related_mob,
+            COALESCE(rel.r_pub, 0) AS related_pub"""
+        auth_sql = """COALESCE(auth_direct.r_int, auth_base.r_int, 0) AS author_int,
+            COALESCE(auth_direct.r_mob, auth_base.r_mob, 0) AS author_mob,
+            COALESCE(auth_direct.r_pub, auth_base.r_pub, 0) AS author_pub"""
+
+    if not  where_clause :
+        where_clause = " where "
+
     return f"""
         WITH all_rights AS (
             SELECT 
@@ -384,6 +413,16 @@ def build_unified_rights_query(where_clause: str) -> str:
             JOIN right_holder rh ON rh.id = tr.right_holder_id
             JOIN label l ON l.id = rh.label_id
             {where_clause}
+                AND EXISTS (
+                    SELECT 1 
+                    FROM track_right sub_tr 
+                    WHERE sub_tr.track_id = t.track_id 
+                    {right_usage_type_filter}
+                    GROUP BY sub_tr.track_id 
+                    HAVING SUM(CASE WHEN sub_tr.right_category_id = {RightCategory.AUTHOR} THEN sub_tr.share_percentage ELSE 0 END) = {share_percentage_value}
+                    AND SUM(CASE WHEN sub_tr.right_category_id = {RightCategory.RELATED} THEN sub_tr.share_percentage ELSE 0 END) = {share_percentage_value}
+                )
+
         ),
         target_tracks AS (
             SELECT 
@@ -398,15 +437,11 @@ def build_unified_rights_query(where_clause: str) -> str:
         SELECT 
             t.label_own_code, t.upc, t.isrc, t.track_name,  t.artist_name, t.authors, t.composer, t.lyricist, t.album_name,
            
-            COALESCE(rel.r_int, 0) AS related_int,
-            COALESCE(rel.r_mob, 0) AS related_mob,
-            COALESCE(rel.r_pub, 0) AS related_pub,
+            {rel_sql},
             rel.holders AS copyright_holder,
 
             COALESCE(auth_direct.label_own_code, auth_base.label_own_code) AS author_label_own_code,
-            COALESCE(auth_direct.r_int, auth_base.r_int, 0) AS author_int,
-            COALESCE(auth_direct.r_mob, auth_base.r_mob, 0) AS author_mob,
-            COALESCE(auth_direct.r_pub, auth_base.r_pub, 0) AS author_pub,
+            {auth_sql},
             COALESCE(auth_direct.holders, auth_base.holders) AS copyright_holder, TO_CHAR(t.created_at::timestamp, 'DD-MM-YYYY') AS "Time period"
 
         FROM target_tracks t
@@ -426,36 +461,38 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
 
     if not export_format:
         export_format = "default"
+    if not right_usage_type_id:
+        right_usage_type_id = RightUsageType.ALL
     TaskProgress.emit(task_id, f"✅ Начало выгрузки ({export_format}).")
-    print(f"✅ Начало выгрузки ({export_format}).")
+    print(f"✅ Начало выгрузки ({export_format}) - right_usage_type_id {right_usage_type_id}; label_id: {label_id}")
+
+    if right_usage_type_id and right_usage_type_id != RightUsageType.ALL:
+        if right_usage_type_id == RightUsageType.INT:
+            columns_sql = f"MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.INT} THEN tr.share_percentage ELSE 0 END) AS INT"
+        elif right_usage_type_id == RightUsageType.MOB:
+            columns_sql = f"MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.MOB} THEN tr.share_percentage ELSE 0 END) AS MOB"
+        elif right_usage_type_id == RightUsageType.PUB:
+            columns_sql = f"MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.PUB} THEN tr.share_percentage ELSE 0 END) AS PUB"
+    else:
+        columns_sql = f"""MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.INT} THEN tr.share_percentage ELSE 0 END) AS INT,
+            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.MOB} THEN tr.share_percentage ELSE 0 END) AS MOB,
+            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.PUB} THEN tr.share_percentage ELSE 0 END) AS PUB"""
 
    
     # 1. Списки колонок для разных форматов и типов прав
     fields_default = f""" t.track_id, t.label_own_code, t.upc, t.isrc, t.track_name, t.artist_name, t.composer, t.lyricist, t.authors,
-            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.INT} THEN tr.share_percentage ELSE 0 END) AS INT,
-
-            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.MOB} THEN tr.share_percentage ELSE 0 END) AS MOB,
-
-            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.PUB} THEN tr.share_percentage ELSE 0 END) AS PUB,
+           {columns_sql},
             l.name AS copyright_holder
 
     """
     
 
     fields_related = f"""  t.label_own_code , t.upc, t.isrc, t.track_name, t.artist_name,  t.authors, t.composer, t.lyricist, t.album_name,
-            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.INT} THEN tr.share_percentage ELSE 0 END) AS INT,
-
-            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.MOB} THEN tr.share_percentage ELSE 0 END) AS MOB,
-
-            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.PUB} THEN tr.share_percentage ELSE 0 END) AS PUB,
+           {columns_sql},
             l.name AS copyright_holder """
 
     fields_author = f""" t.track_id, t.label_own_code, t.track_name, t.artist_name,  t.authors, t.composer, t.lyricist, 
-            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.INT} THEN tr.share_percentage ELSE 0 END) AS INT,
-
-            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.MOB} THEN tr.share_percentage ELSE 0 END) AS MOB,
-
-            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.PUB} THEN tr.share_percentage ELSE 0 END) AS PUB,
+           {columns_sql},
             l.name AS copyright_holder """
                     
 
@@ -487,9 +524,12 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
     if label_id:
         where_parts_base.append("l.id = :label_id")
         params_base["label_id"] = label_id
-    if right_usage_type_id:
+    if right_usage_type_id and right_usage_type_id != RightUsageType.ALL:
         where_parts_base.append(" (tr.right_usage_type_id = :rut_id and share_percentage > 0 )")
         params_base["rut_id"] = right_usage_type_id
+     
+
+        
 
     
     # Конфигурация проходов и суффиксов для полей
@@ -532,7 +572,7 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
 
                 # Собираем финальный SQL
                 where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
-                query = build_standard_query(current_fields, group_clause.get(export_format, ""), where_clause) if export_format != "100plus100" else build_unified_rights_query(where_clause)
+                query = build_standard_query(current_fields, group_clause.get(export_format, ""), where_clause) if export_format != "100plus100" else build_unified_rights_query(where_clause, right_usage_type_id)
 
 
 
