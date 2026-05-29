@@ -1324,11 +1324,103 @@ def calculate_report_data(task_id: str, year: int, month_from: int, month_to: in
     
     TaskProgress.emit(task_id, f"📊 Начало расчета отчета для периода {month_from}-{month_to}/{year}")
     TaskProgress.emit(task_id, f"  Категория прав: {right_category_id}, Тип использования: {right_usage_type_id}")
+   
+  
+    label_filter = ""
+
+    category_filter = (
+        f"IN ({RightCategory.AUTHOR}, {RightCategory.RELATED})"
+        if right_category_id == RightCategory.BOTH
+        else f"= {right_category_id}"
+    )
     
-    if label_ids:
-        TaskProgress.emit(task_id, f"  Фильтр по лейблам: {label_ids}")
-    else:
-        TaskProgress.emit(task_id, "  Лейблы: все")
+    # 2. Сам SQL-запрос
+    sql_query = f"""
+        DELETE FROM report_track_rights_distribution 
+        WHERE report_id IN (
+            SELECT id FROM report 
+            WHERE report_year = :year 
+            AND report_month BETWEEN :month_from AND :month_to
+            AND right_category_id = :right_category_id
+            AND right_usage_type_id = :right_usage_type_id
+        );
+
+        WITH filtered_cache AS (
+            SELECT 
+                rtc.staging_id, rtc.track_id, rtc.right_holder_id, rtc.right_category_id, 
+                rtc.right_usage_type_id, rtc.share_percentage,
+                r.id AS report_id,
+                r.right_category_id AS report_category,
+                sra.payout_amount AS src_amount
+            FROM report r 
+            JOIN staging_report_agg sra ON r.upload_id = sra.upload_id
+            JOIN report_track_rights_cache rtc ON rtc.staging_id = sra.id
+            JOIN right_holder rh ON rh.id = rtc.right_holder_id
+            WHERE r.report_year = :year 
+            AND r.report_month BETWEEN :month_from AND :month_to
+            AND r.right_category_id = :right_category_id
+            AND r.right_usage_type_id = :right_usage_type_id
+            {label_filter}
+            AND rtc.right_category_id {category_filter}
+        ),
+        totals AS (
+            SELECT fc.*,
+                SUM(fc.share_percentage) OVER (PARTITION BY fc.staging_id, fc.right_usage_type_id, fc.right_category_id) AS total_found_shares,
+                CASE WHEN SUM(CASE WHEN fc.right_category_id = 1 THEN fc.share_percentage ELSE 0 END) OVER (PARTITION BY fc.staging_id) > 0 THEN 1 ELSE 0 END +
+                CASE WHEN SUM(CASE WHEN fc.right_category_id = 2 THEN fc.share_percentage ELSE 0 END) OVER (PARTITION BY fc.staging_id) > 0 THEN 1 ELSE 0 END AS total_categories_count
+
+
+            FROM filtered_cache fc
+        ),
+        calculated AS (
+            SELECT t.*,
+                CASE 
+                    WHEN t.total_found_shares > 0 THEN (t.share_percentage / t.total_found_shares) * 100.0
+                    ELSE 0 
+                END AS calc_share
+            FROM totals t
+        )
+        INSERT INTO report_track_rights_distribution (
+            report_id, staging_id, track_id, right_holder_id, right_category_id, right_usage_type_id,
+            original_share_percentage, calculated_share_percentage, is_normalized, final_payout_amount
+        )
+        SELECT 
+            c.report_id, c.staging_id, c.track_id, c.right_holder_id, c.right_category_id, c.right_usage_type_id,
+            c.share_percentage, c.calc_share,
+            (c.total_found_shares != 100),
+            CASE 
+                -- Если отчет комбинированный (BOTH=3) И у трека нашлись И авторские, И смежные права
+                WHEN c.report_category = 3 AND c.total_categories_count = 2 
+                    THEN (c.src_amount * 0.5) * (c.calc_share / 100.0)
+                
+                -- Если у трека только одна категория (смежных нет вообще), отдаем ВСЕ 100% денег этой категории
+                ELSE c.src_amount * (c.calc_share / 100.0)
+            END
+        FROM calculated c;
+    """
+
+    # 3. Подготовка параметров
+    query_params = {
+        "right_category_id": right_category_id,
+        "right_usage_type_id": right_usage_type_id,
+        "year": year,
+        "month_from": month_from,
+        "month_to": month_to,
+    }
+  
+
+    # 4. Выполнение
+    with engine.connect() as conn:
+        conn.execute(text(sql_query), query_params)
+        conn.commit()
+
+
+
+
+
+
+
+
     
     print(f"✅ Расчет данных отчета завершен")
     TaskProgress.emit(task_id, "✅ Расчет данных отчета завершен")
@@ -1357,7 +1449,7 @@ def export_report_data_in_file(task_id: str, year: int, month_from: int, month_t
 
 
 @celery_app.task(name="create_report_task")
-def create_report_task(year: int, month_from: int, month_to: int, right_category_id: int, right_usage_type_id: int, label_ids: Optional[str] = None):
+def create_report_task(partner_id: Optional[int] = None, year: int = None, month_from: int = None, month_to: int = None, right_category_id: int = None, right_usage_type_id: int = None, label_ids: Optional[str] = None):
     """
     Создание отчета:
     1. Расчет данных отчета (calculate_report_data)
@@ -1367,6 +1459,9 @@ def create_report_task(year: int, month_from: int, month_to: int, right_category
         task_id = current_task.request.id
         print(f"🚀 Задача создания отчета запущена (task_id: {task_id})")
         TaskProgress.emit(task_id, f"🚀 Задача создания отчета запущена")
+        if partner_id:
+            print(f"  Партнёр: {partner_id}")
+            TaskProgress.emit(task_id, f"  Партнёр: {partner_id}")
         
         # Преобразование label_ids из строки в список
         labels_list = None
@@ -1387,7 +1482,7 @@ def create_report_task(year: int, month_from: int, month_to: int, right_category
         # Этап 2: Экспорт в файл
         print(f"⏳ Этап 2: Экспорт данных в файл")
         TaskProgress.emit(task_id, "⏳ Этап 2: Экспорт данных в файл")
-        export_report_distribution_to_excel(task_id, year, month_from, month_to, right_category_id, right_usage_type_id, labels_list)
+        export_report_distribution_to_excel(task_id, partner_id, year, month_from, month_to, right_category_id, right_usage_type_id, labels_list)
         
         print(f"✅ Задача создания отчета завершена успешно")
         TaskProgress.emit(task_id, "✅ Задача создания отчета завершена успешно")
@@ -1396,6 +1491,7 @@ def create_report_task(year: int, month_from: int, month_to: int, right_category
             "status": "success",
             "task_id": task_id,
             "params": {
+                "partner_id": partner_id,
                 "year": year,
                 "month_from": month_from,
                 "month_to": month_to,
@@ -1945,11 +2041,12 @@ def calculate_and_save_tracks_rights(connection,
 @celery_app.task(name="export_report_distribution_to_excel")
 def export_report_distribution_to_excel(
         task_id: int,
-        year: int,
-        month_from: int,
-        month_to: int,
-        right_category_id: int,
-        right_usage_type_id: int,
+        partner_id: Optional[int] = None,
+        year: int = None,
+        month_from: int = None,
+        month_to: int = None,
+        right_category_id: int = None,
+        right_usage_type_id: int = None,
         labels: Optional[List[int]] = None
     ):
         if right_category_id == RightCategory.BOTH:
@@ -1982,6 +2079,7 @@ def export_report_distribution_to_excel(
                 for i, lid in enumerate(labels):
                     labels_params[f"lid{i}"] = lid
 
+            partner_condition = ""
             query_params = {
                 "right_category_id": right_category_id,
                 "right_usage_type_id": right_usage_type_id,
@@ -1989,6 +2087,9 @@ def export_report_distribution_to_excel(
                 "month_from": month_from,
                 "month_to": month_to,
             }
+            if partner_id:
+                partner_condition = " AND r.partner_id = :partner_id"
+                query_params["partner_id"] = partner_id
             if labels:
                 query_params.update(labels_params)
 
@@ -2026,6 +2127,7 @@ def export_report_distribution_to_excel(
                 AND r.report_month BETWEEN :month_from AND :month_to
                 AND r.right_category_id = :right_category_id
                 AND r.right_usage_type_id {usage_filter}
+                {partner_condition}
                 {labels_condition_base}
                 GROUP BY ra.id, ra.label_own_code, ra.isrc, ra.track_name, ra.artist_name, ra.authors, ra.play_count, ra.payout_amount, ra.price_per_play
             
@@ -2047,19 +2149,29 @@ def export_report_distribution_to_excel(
                 staging_ids = df_base["staging_id"].to_list()
                 query_params["staging_ids"] = staging_ids
                 
+                # Используем твою проверенную логику с ANY(:staging_ids)
+                # Таблица распределения уже содержит готовые доли и суммы
                 rights_query = text(f"""
                     SELECT 
-                        rtc.staging_id, rc.name AS category, rh.name AS right_holder_name,
-                        rtc.share_percentage, rut.code AS right_code, rh.label_id, l.code AS label_code,
-                        ROW_NUMBER() OVER(PARTITION BY rtc.staging_id, rc.name, rut.code ORDER BY rtc.share_percentage DESC) as rn
-                    FROM report_track_rights_cache rtc
-                    JOIN right_category rc ON rc.id = rtc.right_category_id
-                    JOIN right_holder rh ON rh.id = rtc.right_holder_id
-                    JOIN right_usage_type rut ON rut.id = rtc.right_usage_type_id
+                        rtd.staging_id, 
+                        rc.name AS category, 
+                        rh.name AS right_holder_name,
+                        rtd.original_share_percentage,
+                        rtd.calculated_share_percentage AS share_percentage, 
+                        rtd.final_payout_amount,
+                        rut.code AS right_code, 
+                        rh.label_id, 
+                        l.code AS label_code
+                    FROM report_track_rights_distribution rtd
+                    JOIN right_category rc ON rc.id = rtd.right_category_id
+                    JOIN right_holder rh ON rh.id = rtd.right_holder_id
+                    JOIN right_usage_type rut ON rut.id = rtd.right_usage_type_id
                     JOIN label l ON l.id = rh.label_id
-                    WHERE rtc.staging_id = ANY(:staging_ids)
-                    {labels_condition_base}
+                    WHERE rtd.staging_id = ANY(:staging_ids)
+                    {labels_condition_rights}
                 """)
+                
+             
                 df_rights = pl.read_database(rights_query, conn, execute_options={"parameters": query_params})
 
 
@@ -2079,6 +2191,7 @@ def export_report_distribution_to_excel(
                     AND r.report_month BETWEEN :month_from AND :month_to
                     AND r.right_category_id = :right_category_id
                     AND r.right_usage_type_id {usage_filter}
+                    {partner_condition}
                     AND ra.id NOT IN (SELECT staging_id FROM report_track_rights_cache)
              
                 """)
@@ -2129,29 +2242,46 @@ def export_report_distribution_to_excel(
                             (pl.col("category") + " " + pl.col("right_code") + " %").alias("s_key")
                         )
 
-                        # 2. ПРАВИЛЬНЫЙ ПИВОТ:
-                        # Мы не группируем заранее, а позволяем методу pivot сделать всё за один шаг.
-                        # aggregate_function="sum" внутри pivot сам схлопнет дубли по staging_id,
-                        # если они там есть.
                         s_pivot = df_r_local.pivot(
                             values="share_percentage", 
                             index="staging_id", 
                             on="s_key", 
                             aggregate_function="sum"
                         )
-                                                                        
-                        # Джойним к базе (INNER JOIN оставляет только распределенные)
-                        df_sheet = df_base.join(s_pivot, on="staging_id", how="inner")
+
+                        df_r_local = df_r_local.with_columns(
+                            (pl.col("category") + " " + pl.col("right_code") + " % (Реал.)").alias("s_key_real")
+                        )
+
+                        s_pivot_real = df_r_local.pivot(
+                            values="original_share_percentage", 
+                            index="staging_id", 
+                            on="s_key_real", 
+                            aggregate_function="sum"
+                        )
                         
+                        # 2. Pivot для ГОТОВЫХ СУММ из таблицы rtd
+                        df_r_local = df_r_local.with_columns(
+                            (pl.col("category") + " " + pl.col("right_code") + " Сумма").alias("s_key_money")
+                        )
+                        
+                        m_pivot = df_r_local.pivot(
+                            values="final_payout_amount", 
+                            index="staging_id", 
+                            on="s_key_money", 
+                            aggregate_function="sum"
+                        )
+                        
+                       # 3. Соединяем всё в одну таблицу
+                        df_sheet = df_base.join(s_pivot, on="staging_id", how="inner")
+                        df_sheet = df_sheet.join(s_pivot_real, on="staging_id", how="inner") 
+                        df_sheet = df_sheet.join(m_pivot, on="staging_id", how="inner")
+
+
                         # Считаем суммы (умножаем на деньги ОДИН РАЗ)
                         share_cols = [c for c in df_sheet.columns if c.endswith(" %")]
                         coef = 0.5 if right_category_id == RightCategory.BOTH else 1.0
-                        
-                        for s_col in share_cols:
-                            pay_col = s_col.replace(" %", " Сумма")
-                            df_sheet = df_sheet.with_columns(
-                                (pl.col("Сумма выплат") * coef * (pl.col(s_col).fill_null(0.0) / 100.0)).alias(pay_col)
-                            )
+                      
 
 
                         
@@ -2237,3 +2367,5 @@ def export_report_distribution_to_excel(
         except Exception as e:
             print(f"❌ Ошибка: {str(e)}")
             return {"status": "error", "message": str(e)}
+
+

@@ -395,6 +395,7 @@ async def export_report_to_excel_endpoint(
 
 @router.post("/create_report")
 async def create_report(
+    partner_id: str = Form(default=""),
     year: int = Form(...),
     month_from: int = Form(..., ge=1, le=12),
     month_to: int = Form(..., ge=1, le=12),
@@ -406,6 +407,7 @@ async def create_report(
     Создание отчёта с собранными данными и экспортом в файл.
     
     Параметры:
+    - partner_id: ID партнёра (опционально)
     - year: год отчёта
     - month_from: начальный месяц (1-12)
     - month_to: конечный месяц (1-12)
@@ -414,6 +416,14 @@ async def create_report(
     - label_ids: список ID лейблов через запятую (если пусто, то все лейблы)
     """
     try:
+        # Преобразование partner_id если он передан
+        partner_id_int = None
+        if partner_id and str(partner_id).strip():
+            try:
+                partner_id_int = int(partner_id)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="partner_id должен быть числом")
+        
         # Преобразование label_ids из строки в список
         labels_list = None
         if label_ids and label_ids.strip():
@@ -423,8 +433,21 @@ async def create_report(
                 raise HTTPException(status_code=400, detail="label_ids должны быть числами через запятую")
 
         task_result = create_report_task.delay(
-            year, month_from, month_to, right_category_id, right_usage_type_id, labels_list
+            partner_id_int, year, month_from, month_to, right_category_id, right_usage_type_id, labels_list
         )
+        return {
+            "message": "Задача создания отчёта запущена",
+            "task_id": task_result.id,
+            "params": {
+                "partner_id": partner_id_int,
+                "year": year,
+                "month_from": month_from,
+                "month_to": month_to,
+                "right_category_id": right_category_id,
+                "right_usage_type_id": right_usage_type_id,
+                "label_ids": labels_list if labels_list else "все лейблы"
+            }
+        }
         return {
             "message": "Задача создания отчёта запущена",
             "task_id": task_result.id,

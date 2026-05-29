@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { getRightCategories, getRightUsageTypes, getLabels, createReport } from './api/report.api';
+import { getPartners, getRightCategories, getRightUsageTypes, getLabels, createReport } from './api/report.api';
 import { useTaskLogs } from '../../hooks/useTaskLogs';
 import TaskLogsPanel from '../../components/TaskLogsPanel';
 
 export function CreateReportPage() {
+  const [partners, setPartners] = useState([]);
   const [categories, setCategories] = useState([]);
   const [usageTypes, setUsageTypes] = useState([]);
   const [labels, setLabels] = useState([]);
@@ -12,6 +13,7 @@ export function CreateReportPage() {
   const currentMonth = new Date().getMonth() + 1;
 
   const [form, setForm] = useState({
+    partner_id: '',
     year: currentYear,
     month_from: 1,
     month_to: currentMonth,
@@ -30,9 +32,11 @@ export function CreateReportPage() {
   useEffect(() => {
     (async () => {
       try {
+        const p = await getPartners();
         const c = await getRightCategories();
         const u = await getRightUsageTypes();
         const l = await getLabels();
+        setPartners(p || []);
         setCategories(c || []);
         setUsageTypes(u || []);
         setLabels(l || []);
@@ -71,6 +75,7 @@ export function CreateReportPage() {
     try {
       setMessage('Запуск создания отчёта...');
       const result = await createReport(
+        form.partner_id,
         form.year,
         form.month_from,
         form.month_to,
@@ -110,6 +115,16 @@ export function CreateReportPage() {
       <h2 className="page-title">Создание отчёта</h2>
 
       <form onSubmit={handleSubmit} className="action-section">
+        <div className="form-group">
+          <label className="form-label">Партнёр (опционально)</label>
+          <select name="partner_id" value={form.partner_id} onChange={handleChange} className="form-control">
+            <option value="">-- выберите --</option>
+            {partners.map(p => (
+              <option key={p.id} value={p.id}>{p.label}</option>
+            ))}
+          </select>
+        </div>
+
         <div className="form-group">
           <label className="form-label">Год</label>
           <input

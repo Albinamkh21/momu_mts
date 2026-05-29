@@ -28,8 +28,9 @@ export const uploadReport = async (formData) => {
   return data;
 };
 
-export const createReport = async (year, monthFrom, monthTo, rightCategoryId, rightUsageTypeId, labelIds) => {
+export const createReport = async (partnerId, year, monthFrom, monthTo, rightCategoryId, rightUsageTypeId, labelIds) => {
   const formData = new FormData();
+  formData.append('partner_id', partnerId);
   formData.append('year', year);
   formData.append('month_from', monthFrom);
   formData.append('month_to', monthTo);
