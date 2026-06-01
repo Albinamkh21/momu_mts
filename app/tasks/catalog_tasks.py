@@ -386,7 +386,9 @@ def build_unified_rights_query(where_clause: str, right_usage_type_id: int = Non
             COALESCE(auth_direct.r_pub, auth_base.r_pub, 0) AS author_pub"""
 
     if not  where_clause :
-        where_clause = " where "
+        where_clause = " where  "
+    else:   
+        where_clause += " AND "    
 
     return f"""
         WITH all_rights AS (
@@ -413,7 +415,7 @@ def build_unified_rights_query(where_clause: str, right_usage_type_id: int = Non
             JOIN right_holder rh ON rh.id = tr.right_holder_id
             JOIN label l ON l.id = rh.label_id
             {where_clause}
-                AND EXISTS (
+                   EXISTS (
                     SELECT 1 
                     FROM track_right sub_tr 
                     WHERE sub_tr.track_id = t.track_id 
@@ -549,6 +551,7 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
     total_rows = 0
     CHUNK_SIZE = 100000
 
+
     # 3. Выполнение и запись
     try:
         with engine.connect() as conn:
@@ -580,10 +583,15 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
 
                 # Выполнение запроса
                 result = conn.execution_options(stream_results=True).execute(text(query), params)
+                TaskProgress.emit(task_id, f"✅ Запрос выполнен для прохода: {p['msg']} права. Начинаем выгрузку в файл...")
+                print(f"✅ Запрос выполнен для прохода: {p['msg']} права. Начинаем выгрузку в файл...")
+
                 headers = result.keys()
 
                 #full_writer = BaseCSVWriter(os.path.join(storage_dir, f"{base_filename}_full.csv"), headers)
                 tome_writer = TomeWriterFactory.create("xlsx", base_filename, storage_dir, headers, max_rows=CHUNK_SIZE * 5)
+                 
+
 
                 while True:
                     chunk = result.fetchmany(CHUNK_SIZE)
