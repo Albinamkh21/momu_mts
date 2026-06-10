@@ -1450,11 +1450,7 @@ def export_report_data_in_file(task_id: str, year: int, month_from: int, month_t
 
 @celery_app.task(name="create_report_task")
 def create_report_task(partner_id: Optional[int] = None, year: int = None, month_from: int = None, month_to: int = None, right_category_id: int = None, right_usage_type_id: int = None, label_ids: Optional[str] = None):
-    """
-    Создание отчета:
-    1. Расчет данных отчета (calculate_report_data)
-    2. Экспорт данных в файл (export_report_data_in_file)
-    """
+
     try:
         task_id = current_task.request.id
         print(f"🚀 Задача создания отчета запущена (task_id: {task_id})")
