@@ -1327,9 +1327,11 @@ def calculate_report_data(task_id: str, year: int, month_from: int, month_to: in
    
   
     label_filter = ""
+    if label_ids:
+        label_filter = f" AND rh.label_id IN ({', '.join(map(str, label_ids))}) "
 
     category_filter = (
-        f"IN ({RightCategory.AUTHOR}, {RightCategory.RELATED})"
+        f"IN ({RightCategory.AUTHOR}, {RightCategory.RELATED}, {RightCategory.BOTH})"
         if right_category_id == RightCategory.BOTH
         else f"= {right_category_id}"
     )
@@ -1341,7 +1343,7 @@ def calculate_report_data(task_id: str, year: int, month_from: int, month_to: in
             SELECT id FROM report 
             WHERE report_year = :year 
             AND report_month BETWEEN :month_from AND :month_to
-            AND right_category_id = :right_category_id
+            AND right_category_id  {category_filter}
             AND right_usage_type_id = :right_usage_type_id
         );
 
@@ -1358,18 +1360,30 @@ def calculate_report_data(task_id: str, year: int, month_from: int, month_to: in
             JOIN right_holder rh ON rh.id = rtc.right_holder_id
             WHERE r.report_year = :year 
             AND r.report_month BETWEEN :month_from AND :month_to
-            AND r.right_category_id = :right_category_id
+            AND r.right_category_id  {category_filter}
             AND r.right_usage_type_id = :right_usage_type_id
             {label_filter}
             AND rtc.right_category_id {category_filter}
         ),
         totals AS (
             SELECT fc.*,
-                SUM(fc.share_percentage) OVER (PARTITION BY fc.staging_id, fc.right_usage_type_id, fc.right_category_id) AS total_found_shares,
-                CASE WHEN SUM(CASE WHEN fc.right_category_id = 1 THEN fc.share_percentage ELSE 0 END) OVER (PARTITION BY fc.staging_id) > 0 THEN 1 ELSE 0 END +
-                CASE WHEN SUM(CASE WHEN fc.right_category_id = 2 THEN fc.share_percentage ELSE 0 END) OVER (PARTITION BY fc.staging_id) > 0 THEN 1 ELSE 0 END AS total_categories_count
-
-
+                -- Возвращаем твой родной, исходный подсчет долей (он работал правильно!)
+                SUM(fc.share_percentage) OVER (
+                    PARTITION BY fc.staging_id, fc.track_id, fc.right_category_id
+                ) AS total_found_shares,
+                
+                -- ТОЧЕЧНОЕ ДОБАВЛЕНИЕ: Считаем, сколько РЕАЛЬНЫХ категорий прав (с долей > 0) привязано к staging_id.
+                -- Если для одного staging_id есть и живые авторы, и живая смежка — тут будет цифра 2.
+                (
+                    CASE WHEN EXISTS (
+                        SELECT 1 FROM report_track_rights_cache rtc2 
+                        WHERE rtc2.staging_id = fc.staging_id AND rtc2.right_category_id = 1 AND rtc2.share_percentage > 0
+                    ) THEN 1 ELSE 0 END +
+                    CASE WHEN EXISTS (
+                        SELECT 1 FROM report_track_rights_cache rtc3 
+                        WHERE rtc3.staging_id = fc.staging_id AND rtc3.right_category_id = 2 AND rtc3.share_percentage > 0
+                    ) THEN 1 ELSE 0 END
+                ) AS live_categories_count
             FROM filtered_cache fc
         ),
         calculated AS (
@@ -1389,14 +1403,30 @@ def calculate_report_data(task_id: str, year: int, month_from: int, month_to: in
             c.share_percentage, c.calc_share,
             (c.total_found_shares != 100),
             CASE 
-                -- Если отчет комбинированный (BOTH=3) И у трека нашлись И авторские, И смежные права
-                WHEN c.report_category = 3 AND c.total_categories_count = 2 
+                -- 1. Если отчет целевой (Смежка=2 или Авторские=1) — отдаем 100% денег совпавшей категории
+                WHEN c.report_category IN (1, 2) AND c.right_category_id = c.report_category
+                    THEN c.src_amount * (c.calc_share / 100.0)
+                
+                -- 2. Если отчет BOTH (3) И база нашла РЕАЛЬНО и авторов, и смежку с долями > 0 (как в первом кейсе)
+                -- Только в этом случае делим сумму 50/50!
+                WHEN c.report_category = 3 AND c.live_categories_count = 2
                     THEN (c.src_amount * 0.5) * (c.calc_share / 100.0)
                 
-                -- Если у трека только одна категория (смежных нет вообще), отдаем ВСЕ 100% денег этой категории
-                ELSE c.src_amount * (c.calc_share / 100.0)
-            END
-        FROM calculated c;
+                -- 3. Во всех остальных случаях для BOTH (когда живая категория только одна, как во втором кейсе)
+                -- Возвращаем твою старую логику: отдаем все 100% денег живой категории
+                WHEN c.report_category = 3 
+                    THEN c.src_amount * (c.calc_share / 100.0)
+                
+                ELSE 0
+            END AS final_payout_amount
+        FROM calculated c
+        WHERE 
+            -- Фильтр, который оставляет только нужные строки
+            CASE 
+                WHEN c.report_category IN (1, 2) AND c.right_category_id = c.report_category THEN 1
+                WHEN c.report_category = 3 AND (c.share_percentage > 0 OR c.calc_share > 0) THEN 1
+                ELSE 0
+            END = 1;
     """
 
     # 3. Подготовка параметров
@@ -1478,7 +1508,11 @@ def create_report_task(partner_id: Optional[int] = None, year: int = None, month
         # Этап 2: Экспорт в файл
         print(f"⏳ Этап 2: Экспорт данных в файл")
         TaskProgress.emit(task_id, "⏳ Этап 2: Экспорт данных в файл")
-        export_report_distribution_to_excel(task_id, partner_id, year, month_from, month_to, right_category_id, right_usage_type_id, labels_list)
+
+        is_momu = labels_list and len(labels_list) == 1 and labels_list[0] == 27
+        export_report_distribution_to_excel(task_id, partner_id, year, month_from, month_to, right_category_id, right_usage_type_id, labels_list, is_momu)
+        
+        
         
         print(f"✅ Задача создания отчета завершена успешно")
         TaskProgress.emit(task_id, "✅ Задача создания отчета завершена успешно")
@@ -2034,73 +2068,65 @@ def calculate_and_save_tracks_rights(connection,
 
 
 
-@celery_app.task(name="export_report_distribution_to_excel")
 def export_report_distribution_to_excel(
-        task_id: int,
-        partner_id: Optional[int] = None,
-        year: int = None,
-        month_from: int = None,
-        month_to: int = None,
-        right_category_id: int = None,
-        right_usage_type_id: int = None,
-        labels: Optional[List[int]] = None
-    ):
-        if right_category_id == RightCategory.BOTH:
-            category_filter = f"IN ({RightCategory.AUTHOR}, {RightCategory.RELATED})"
-        else:
-            category_filter = f"= {right_category_id}"
+    task_id: int,
+    partner_id: Optional[int] = None,
+    year: int = None,
+    month_from: int = None,
+    month_to: int = None,
+    right_category_id: int = None,
+    right_usage_type_id: int = None,
+    labels: Optional[List[int]] = None,
+    is_momu_mode: bool = False
+):
+    if right_category_id == RightCategory.BOTH:
+        category_filter = f"IN ({RightCategory.AUTHOR}, {RightCategory.RELATED}, {RightCategory.BOTH})"
+    else:
+        category_filter = f"= {right_category_id}"
 
-        if right_usage_type_id == RightUsageType.ALL:    
-            usage_filter = f"IN ({RightUsageType.PUB}, {RightUsageType.INT}, {RightUsageType.MOB})"
-        else:
-            usage_filter = f"= {right_usage_type_id}"
-    
-            
+    if right_usage_type_id == RightUsageType.ALL:    
+        usage_filter = f"IN ({RightUsageType.PUB}, {RightUsageType.INT}, {RightUsageType.MOB})"
+    else:
+        usage_filter = f"= {right_usage_type_id}"
 
-        try:
-            print("📤 Начинаем экспорт сводного отчёта из готовых распределений (report_distribution)...")
-            TaskProgress.emit(getattr(current_task.request, 'id', None), "📤 Начинаем экспорт...")
+    try:
+        print("📤 Начинаем экспорт отчёта из готовых распределений...")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), "📤 Начинаем экспорт...")
 
-            total_source_money = 0.0
-            total_distributed_money = 0.0
+        # ---------- 1. Подготовка параметров и условий ----------
+        labels_condition_base = ""
+        labels_condition_rights = ""
+        labels_params = {}
+        if labels:
+            placeholders = ",".join([f":lid{i}" for i in range(len(labels))])
+            labels_condition_base = f" AND t.label_id IN ({placeholders}) "
+            labels_condition_rights = f" AND l.id IN ({placeholders}) "  # Исправлено tl на rh для консистентности
+            for i, lid in enumerate(labels):
+                labels_params[f"lid{i}"] = lid
 
-            # ---------- 1. Подготовка параметров и условий ----------
-            labels_condition_base = ""
-            labels_condition_rights = ""
-            labels_params = {}
-            if labels:
-                placeholders = ",".join([f":lid{i}" for i in range(len(labels))])
-                labels_condition_base = f" AND l.id IN ({placeholders}) "
-                labels_condition_rights = f" AND tl.label_id IN ({placeholders}) "
-                for i, lid in enumerate(labels):
-                    labels_params[f"lid{i}"] = lid
+        partner_condition = ""
+        query_params = {
+            "right_category_id": right_category_id,
+            "right_usage_type_id": right_usage_type_id,
+            "year": year,
+            "month_from": month_from,
+            "month_to": month_to,
+        }
+        if partner_id:
+            partner_condition = " AND r.partner_id = :partner_id"
+            query_params["partner_id"] = partner_id
+        if labels:
+            query_params.update(labels_params)
 
-            partner_condition = ""
-            query_params = {
-                "right_category_id": right_category_id,
-                "right_usage_type_id": right_usage_type_id,
-                "year": year,
-                "month_from": month_from,
-                "month_to": month_to,
-            }
-            if partner_id:
-                partner_condition = " AND r.partner_id = :partner_id"
-                query_params["partner_id"] = partner_id
-            if labels:
-                query_params.update(labels_params)
-
-            # ---------- 2. Запрос базовых данных 
-            base_query = text(f"""
-                SELECT DISTINCT
-                
+        # ---------- 2. Запрос базовых данных ----------
+        base_query = text(f"""
+            SELECT DISTINCT
                 ra.id AS staging_id,
                 ra.label_own_code AS "Отчет код лейбла",
                 ra.isrc AS "Отчет ISRC",
                 ra.track_name AS "Отчет название трека",
                 ra.artist_name AS "Отчет исполнитель",
                 ra.authors AS "Отчет авторы",
-           
-                
                 MAX(t.label_own_code) AS "Код лейбла",
                 MAX(t.isrc) AS "Код ISRC",
                 MAX(t.track_name) AS "Название трека",
@@ -2108,260 +2134,256 @@ def export_report_distribution_to_excel(
                 MAX(t.composer) AS "Автор музыки",
                 MAX(t.lyricist) AS "Автор текста",
                 MAX(t.authors) AS "Авторы",
-
-               
                 ra.play_count AS "Кол-во прослушиваний",
                 ra.payout_amount AS "Сумма выплат",
                 ra.price_per_play AS "Цена за прослушивание",
                 ra.service_name AS "Сервис"
+            FROM staging_report_agg ra
+            JOIN report r ON r.upload_id = ra.upload_id
+            JOIN report_track_rights_cache rtc ON rtc.staging_id = ra.id
+            JOIN mv_track_extended t ON t.track_id = rtc.track_id
+            WHERE r.report_year = :year
+            AND r.report_month BETWEEN :month_from AND :month_to
+            AND r.right_category_id {category_filter}
+            AND r.right_usage_type_id {usage_filter}
+            {partner_condition}
+            {labels_condition_base}
+            GROUP BY ra.id, ra.label_own_code, ra.isrc, ra.track_name, ra.artist_name, ra.authors, ra.play_count, ra.payout_amount, ra.price_per_play
+        """)
 
+        with engine.connect() as conn:
+            result = conn.execute(base_query, query_params)
+            df_base = pl.DataFrame(list(result.mappings()), infer_schema_length=None)
+
+            if not df_base.is_empty():
+                df_base = df_base.with_columns(pl.col(pl.Object).cast(pl.Utf8))
+            else:
+                return {"status": "success", "rows_exported": 0, "output_files": []}
+
+            print("Сбор базы завершён, собираем распределённые права...")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), "Сбор базы завершён, загружаем права...")
+
+            staging_ids = df_base["staging_id"].to_list()
+            query_params["staging_ids"] = staging_ids
+            
+            # Унифицированный запрос прав (тянет и лейбл, и правообладателя)
+            rights_query = text(f"""
+                SELECT 
+                    rtd.staging_id, 
+                    rc.name AS category, 
+                    rh.name AS right_holder_name,
+                    rtd.right_holder_id,
+                    rtd.original_share_percentage,
+                    rtd.calculated_share_percentage AS share_percentage, 
+                    rtd.final_payout_amount,
+                    rut.code AS right_code, 
+                    rh.label_id, 
+                    l.code AS label_code
+                FROM report_track_rights_distribution rtd
+                JOIN right_category rc ON rc.id = rtd.right_category_id
+                JOIN right_holder rh ON rh.id = rtd.right_holder_id
+                JOIN right_usage_type rut ON rut.id = rtd.right_usage_type_id
+                JOIN label l ON l.id = rh.label_id
+                WHERE rtd.staging_id = ANY(:staging_ids)
+                {labels_condition_rights}
+            """)
+            
+            df_rights = pl.read_database(rights_query, conn, execute_options={"parameters": query_params})
+
+            # Запрос нераспределенных треков
+            unclaimed_query = text(f"""
+                SELECT 
+                    ra.id AS staging_id,
+                    ra.label_own_code AS "Отчет код лейбла",
+                    ra.isrc AS "Отчет ISRC",
+                    ra.track_name AS "Отчет название трека",
+                    ra.artist_name AS "Отчет исполнитель",
+                    ra.authors AS "Отчет авторы",
+                    ra.play_count AS "Кол-во прослушиваний",
+                    ra.payout_amount AS "Сумма выплат"
                 FROM staging_report_agg ra
                 JOIN report r ON r.upload_id = ra.upload_id
-                JOIN report_track_rights_cache rtc ON rtc.staging_id = ra.id
-                JOIN mv_track_extended t ON t.track_id = rtc.track_id
                 WHERE r.report_year = :year
                 AND r.report_month BETWEEN :month_from AND :month_to
-                AND r.right_category_id = :right_category_id
+                AND r.right_category_id {category_filter}
                 AND r.right_usage_type_id {usage_filter}
                 {partner_condition}
-                {labels_condition_base}
-                GROUP BY ra.id, ra.label_own_code, ra.isrc, ra.track_name, ra.artist_name, ra.authors, ra.play_count, ra.payout_amount, ra.price_per_play
-            
+                AND NOT EXISTS (
+                    SELECT 1 
+                    FROM report_track_rights_distribution rtrd 
+                    WHERE rtrd.staging_id = ra.id 
+                    AND rtrd.report_id = r.id
+                )
             """)
+            df_unclaimed = pl.read_database(unclaimed_query, conn, execute_options={"parameters": query_params})
 
-            with engine.connect() as conn:
-                result = conn.execute(base_query, query_params)
-                df_base = pl.DataFrame(list(result.mappings()), infer_schema_length=None)
+            meta_row = conn.execute(text(f"""
+                SELECT
+                    string_agg(DISTINCT rc.name, ', ') AS right_category_name,
+                    string_agg(DISTINCT rut.code, ', ') AS right_usage_type_code
+                FROM right_category rc
+                JOIN right_usage_type rut ON rut.id {usage_filter}  
+                WHERE rc.id = :right_category_id
+            """), {"right_category_id": right_category_id, "right_usage_type_id": right_usage_type_id}).fetchone()
 
-                if not df_base.is_empty():
-                    df_base = df_base.with_columns(pl.col(pl.Object).cast(pl.Utf8))
-                if df_base.is_empty():
-                    return {"status": "success", "rows_exported": 0} 
-                print("Сбор базы завершён, собираем распределённые права...")
-                TaskProgress.emit(getattr(current_task.request, 'id', None), "Сбор базы завершён, загружаем права...")
+            right_category_name = (meta_row.right_category_name if meta_row and meta_row.right_category_name else str(right_category_id))
+            right_usage_type_code = (meta_row.right_usage_type_code if meta_row and meta_row.right_usage_type_code else str(right_usage_type_id))
 
+            # ---------- 3. Подготовка окружения файлов ----------
+            storage_dir = "/app/storage"
+            os.makedirs(storage_dir, exist_ok=True)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            base_filename = f"report_{year}_{month_from}_{month_to}_{right_category_name}_{right_usage_type_code}"
 
+            # Хелпер форматирования чисел
+            def get_column_formats(columns_list):
+                formats = {}
+                for col in columns_list:
+                    if col.endswith(" Сумма") or col in ["Сумма выплат", "Цена за прослушивание"]:
+                        formats[col] = "#,##0.00"
+                    elif col.endswith(" %") or col.endswith(" % (Реал.)"):
+                        formats[col] = "0.00"
+                    elif col in ["Кол-во прослушиваний"]:
+                        formats[col] = "#,##0"
+                return formats
 
-                staging_ids = df_base["staging_id"].to_list()
-                query_params["staging_ids"] = staging_ids
+            # Хелпер стилизации Excel (Шапка + ИТОГО)
+            def apply_final_formats(wb):
+                header_format = wb.add_format({'bold': True, 'font_size': 12, 'align': 'center', 'valign': 'vcenter'})
+                total_format = wb.add_format({'bold': True, 'font_size': 12})
+                for worksheet in wb.worksheets():
+                    if worksheet.dim_colmax is not None:
+                        worksheet.set_column(0, worksheet.dim_colmax, 30)
+                    worksheet.set_row(0, 25, header_format) 
+                    worksheet.set_row(worksheet.dim_rowmax, None, total_format)
+
+            # Переключение ключей группировки
+            group_col = "right_holder_id" if is_momu_mode else "label_id"
+            name_col = "right_holder_name" if is_momu_mode else "label_code"
+            
+            unique_ids = df_rights[group_col].unique().to_list()
+            all_summaries = []
+            output_files = []
+
+            # Если режим стандартный — открываем один общий Workbook
+            std_wb = None
+            if not is_momu_mode:
+                std_filepath = os.path.join(storage_dir, f"{base_filename}_{timestamp}.xlsx")
+                std_wb = xlsxwriter.Workbook(std_filepath)
+                output_files.append(std_filepath)
+
+            # ---------- 4. Цикл генерации данных ----------
+            for uid in unique_ids:
+                df_r_local = df_rights.filter(pl.col(group_col) == uid)
+                group_name = df_r_local[name_col][0]
                 
-                # Используем твою проверенную логику с ANY(:staging_ids)
-                # Таблица распределения уже содержит готовые доли и суммы
-                rights_query = text(f"""
-                    SELECT 
-                        rtd.staging_id, 
-                        rc.name AS category, 
-                        rh.name AS right_holder_name,
-                        rtd.original_share_percentage,
-                        rtd.calculated_share_percentage AS share_percentage, 
-                        rtd.final_payout_amount,
-                        rut.code AS right_code, 
-                        rh.label_id, 
-                        l.code AS label_code
-                    FROM report_track_rights_distribution rtd
-                    JOIN right_category rc ON rc.id = rtd.right_category_id
-                    JOIN right_holder rh ON rh.id = rtd.right_holder_id
-                    JOIN right_usage_type rut ON rut.id = rtd.right_usage_type_id
-                    JOIN label l ON l.id = rh.label_id
-                    WHERE rtd.staging_id = ANY(:staging_ids)
-                    {labels_condition_rights}
-                """)
+                # Пивоты долей и готовых сумм
+                df_r_local = df_r_local.with_columns((pl.col("category") + " " + pl.col("right_code") + " %").alias("s_key"))
+                s_pivot = df_r_local.pivot(values="share_percentage", index="staging_id", on="s_key", aggregate_function="sum")
                 
-             
-                df_rights = pl.read_database(rights_query, conn, execute_options={"parameters": query_params})
-
-
-                unclaimed_query = text(f"""
-                    SELECT 
-                        ra.id AS staging_id,
-                        ra.label_own_code AS "Отчет код лейбла",
-                        ra.isrc AS "Отчет ISRC",
-                        ra.track_name AS "Отчет название трека",
-                        ra.artist_name AS "Отчет исполнитель",
-                        ra.authors AS "Отчет авторы",
-                        ra.play_count AS "Кол-во прослушиваний",
-                        ra.payout_amount AS "Сумма выплат"
-                    FROM staging_report_agg ra
-                    JOIN report r ON r.upload_id = ra.upload_id
-                    WHERE r.report_year = :year
-                    AND r.report_month BETWEEN :month_from AND :month_to
-                    AND r.right_category_id = :right_category_id
-                    AND r.right_usage_type_id {usage_filter}
-                    {partner_condition}
-                    AND ra.id NOT IN (SELECT staging_id FROM report_track_rights_cache)
-             
-                """)
-                df_unclaimed = pl.read_database(unclaimed_query, conn, execute_options={"parameters": query_params})
-
-
-                meta_row = conn.execute(text(f"""
-                    SELECT
-                        -- Склеиваем уникальные имена категорий и типы использования через запятую
-                        string_agg(DISTINCT rc.name, ', ') AS right_category_name,
-                        string_agg(DISTINCT rut.code, ', ') AS right_usage_type_code
-                    FROM right_category rc
-                    JOIN right_usage_type rut ON rut.id { usage_filter }  
-                    WHERE rc.id {category_filter}
-                """), {
-                   
-                    "right_category_id" : right_category_id,
-                    "right_usage_type_id": right_usage_type_id,
-                }).fetchone()
-
-      
-                right_category_name = (meta_row.right_category_name if meta_row and meta_row.right_category_name else str(right_category_ids))
-                right_usage_type_code = (meta_row.right_usage_type_code if meta_row and meta_row.right_usage_type_code else str(right_usage_type_id))
-
-                # 4. Подготовка файла
-                storage_dir = "/app/storage"
-                os.makedirs(storage_dir, exist_ok=True)
-                filename = f"report_{year}_{month_from}_{month_to}_{right_category_name}_{right_usage_type_code}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-                output_path = os.path.join(storage_dir, filename)
-
-                # 5. Генерация вкладок по лейблам
-                all_label_ids = df_rights["label_id"].unique().to_list()
+                df_r_local = df_r_local.with_columns((pl.col("category") + " " + pl.col("right_code") + " % (Реал.)").alias("s_key_real"))
+                s_pivot_real = df_r_local.pivot(values="original_share_percentage", index="staging_id", on="s_key_real", aggregate_function="sum")
                 
-                all_summaries = []
-
-                with xlsxwriter.Workbook(output_path) as workbook:
+                df_r_local = df_r_local.with_columns((pl.col("category") + " " + pl.col("right_code") + " Сумма").alias("s_key_money"))
+                m_pivot = df_r_local.pivot(values="final_payout_amount", index="staging_id", on="s_key_money", aggregate_function="sum")
                 
-                    header_format = workbook.add_format({'bold': True, 'font_size': 12, 'align': 'center', 'valign': 'vcenter'})
-                    total_format = workbook.add_format({'bold': True, 'font_size': 12})
+                # Джоины с базой
+                df_sheet = df_base.join(s_pivot, on="staging_id", how="inner")
+                df_sheet = df_sheet.join(s_pivot_real, on="staging_id", how="inner") 
+                df_sheet = df_sheet.join(m_pivot, on="staging_id", how="inner")
 
-                    # 1. Цикл по лейблам
-                    for l_id in all_label_ids:
-                        df_r_local = df_rights.filter(pl.col("label_id") == l_id)
-                        label_code = df_r_local["label_code"][0]
-                        
-                        # Формируем структуру прав (1 staging_id = 1 строка с колонками %)
-                        df_r_local = df_r_local.with_columns(
-                            (pl.col("category") + " " + pl.col("right_code") + " %").alias("s_key")
-                        )
-
-                        s_pivot = df_r_local.pivot(
-                            values="share_percentage", 
-                            index="staging_id", 
-                            on="s_key", 
-                            aggregate_function="sum"
-                        )
-
-                        df_r_local = df_r_local.with_columns(
-                            (pl.col("category") + " " + pl.col("right_code") + " % (Реал.)").alias("s_key_real")
-                        )
-
-                        s_pivot_real = df_r_local.pivot(
-                            values="original_share_percentage", 
-                            index="staging_id", 
-                            on="s_key_real", 
-                            aggregate_function="sum"
-                        )
-                        
-                        # 2. Pivot для ГОТОВЫХ СУММ из таблицы rtd
-                        df_r_local = df_r_local.with_columns(
-                            (pl.col("category") + " " + pl.col("right_code") + " Сумма").alias("s_key_money")
-                        )
-                        
-                        m_pivot = df_r_local.pivot(
-                            values="final_payout_amount", 
-                            index="staging_id", 
-                            on="s_key_money", 
-                            aggregate_function="sum"
-                        )
-                        
-                       # 3. Соединяем всё в одну таблицу
-                        df_sheet = df_base.join(s_pivot, on="staging_id", how="inner")
-                        df_sheet = df_sheet.join(s_pivot_real, on="staging_id", how="inner") 
-                        df_sheet = df_sheet.join(m_pivot, on="staging_id", how="inner")
-
-
-                        # Считаем суммы (умножаем на деньги ОДИН РАЗ)
-                        share_cols = [c for c in df_sheet.columns if c.endswith(" %")]
-                        coef = 0.5 if right_category_id == RightCategory.BOTH else 1.0
-                      
-
-
-                        
-                        # Собираем данные для сводного листа
-                        money_cols = [c for c in df_sheet.columns if c.endswith(" Сумма")]
-                        summary_row = df_sheet.select([
-                            pl.lit(label_code).alias("Правообладатель"),
-                            *[pl.col(c).sum().alias(c) for c in money_cols]
-                        ])
-                        all_summaries.append(summary_row)
-                        
-               
-
+                money_cols = [c for c in df_sheet.columns if c.endswith(" Сумма")]
                 
-                        
-                        # 1. Гарантируем, что колонка текстовая, чтобы "ИТОГО" не вызывало ошибку типов
-                        df_sheet = df_sheet.with_columns(pl.col("Отчет код лейбла").cast(pl.Utf8))
+                # Сбор данных для Сводного листа
+                summary_row = df_sheet.select([
+                    pl.lit(group_name).alias("Правообладатель"),
+                    *[pl.col(c).sum().alias(c) for c in money_cols]
+                ])
+                all_summaries.append(summary_row)
+                
+                # Добавление строки ИТОГО на лист
+                df_sheet = df_sheet.with_columns(pl.col("Отчет код лейбла").cast(pl.Utf8))
+                total_row_dict = {col: None for col in df_sheet.columns}
+                total_row_dict["Отчет код лейбла"] = "ИТОГО"
+                for col in money_cols:
+                    total_row_dict[col] = df_sheet[col].sum()
 
-                        # 2. Создаем структуру для строки итогов (изначально все поля пустые)
-                        total_row_dict = {col: None for col in df_sheet.columns}
-                        
-                        # 3. Заполняем текст и считаем суммы только по распределенным деньгам (money_cols)
-                        total_row_dict["Отчет код лейбла"] = "ИТОГО"
-                        for col in money_cols:
-                            total_row_dict[col] = df_sheet[col].sum()
+                df_total = pl.DataFrame([total_row_dict], schema=df_sheet.schema)
+                df_sheet = pl.concat([df_sheet, df_total])
+                
+                # Имя вкладки (не более 31 символа)
+                sheet_name = str(group_name)[:31]
 
-                        # 4. Превращаем словарь в мини-таблицу из 1 строки и склеиваем с основной
-                        df_total = pl.DataFrame([total_row_dict], schema=df_sheet.schema)
-                        df_sheet = pl.concat([df_sheet, df_total])
-                        
-                        # ==========================================================
-                        df_sheet.write_excel(workbook, worksheet=str(label_code)[:31],autofit=True )
+                # Запись в целевой файл
+                if is_momu_mode:
+                    safe_name = re.sub(r'[\\/*?:"<>|]', "", str(group_name)).strip()
+                    rh_filepath = os.path.join(storage_dir, f"{base_filename}_{safe_name}_{timestamp}.xlsx")
+                    rh_wb = xlsxwriter.Workbook(rh_filepath)
+                    
+                    df_sheet.write_excel(rh_wb, worksheet=sheet_name, autofit=True, column_formats=get_column_formats(df_sheet.columns))
+                    apply_final_formats(rh_wb)
+                    rh_wb.close()
+                    output_files.append(rh_filepath)
+                else:
+                    df_sheet.write_excel(std_wb, worksheet=sheet_name, autofit=True, column_formats=get_column_formats(df_sheet.columns))
 
-                    # 2. ВНЕ ЦИКЛА: Записываем сводный лист
-                    if all_summaries:
-                        df_summary = pl.concat(all_summaries, how="diagonal").fill_null(0)
-                        df_summary = df_summary.group_by("Правообладатель").sum()
+            # ---------- 5. Запись Сводного отчета и Нераспределенного ----------
+            sys_wb = None
+            if is_momu_mode and (all_summaries or df_unclaimed.height > 0):
+                sys_filepath = os.path.join(storage_dir, f"{base_filename}_SUMMARY_{timestamp}.xlsx")
+                sys_wb = xlsxwriter.Workbook(sys_filepath)
+                output_files.append(sys_filepath)
+            else:
+                sys_wb = std_wb
 
-                        # --- ДОБАВЛЕНИЕ СТРОКИ ИТОГО ДЛЯ СВОДНОГО ОТЧЕТА ---
-                        df_summary = df_summary.with_columns(pl.col("Правообладатель").cast(pl.Utf8))
-                        summary_total = {col: None for col in df_summary.columns}
-                        summary_total["Правообладатель"] = "ИТОГО"
-                        
-                        # Суммируем все числовые колонки с деньгами
-                        for col in df_summary.columns:
-                            if col != "Правообладатель":
-                                summary_total[col] = df_summary[col].sum()
-                                
-                        df_sum_total = pl.DataFrame([summary_total], schema=df_summary.schema)
-                        df_summary = pl.concat([df_summary, df_sum_total])
-                        # --------------------------------------------------
+            if sys_wb:
+                # Запись сводного листа
+                if all_summaries:
+                    df_summary = pl.concat(all_summaries, how="diagonal").fill_null(0)
+                    df_summary = df_summary.group_by("Правообладатель").sum()
 
-                        df_summary.write_excel(workbook, worksheet="Сводный отчет", autofit=True)
-
-                        
-
-              
-                   
-                    if df_unclaimed.height > 0:
-
-                        # --- ДОБАВЛЕНИЕ СТРОКИ ИТОГО ДЛЯ НЕРАСПРЕДЕЛЕННОГО ---
-                        df_unclaimed = df_unclaimed.with_columns(pl.col("Отчет код лейбла").cast(pl.Utf8))
-                        unclaimed_total = {col: None for col in df_unclaimed.columns}
-                        unclaimed_total["Отчет код лейбла"] = "ИТОГО"
-                        
-                        # Здесь суммируем строго исходную колонку "Сумма выплат"
-                        if "Сумма выплат" in df_unclaimed.columns:
-                            unclaimed_total["Сумма выплат"] = df_unclaimed["Сумма выплат"].sum()
+                    df_summary = df_summary.with_columns(pl.col("Правообладатель").cast(pl.Utf8))
+                    summary_total = {col: None for col in df_summary.columns}
+                    summary_total["Правообладатель"] = "ИТОГО"
+                    
+                    for col in df_summary.columns:
+                        if col != "Правообладатель":
+                            summary_total[col] = df_summary[col].sum()
                             
-                        df_uncl_total = pl.DataFrame([unclaimed_total], schema=df_unclaimed.schema)
-                        df_unclaimed = pl.concat([df_unclaimed, df_uncl_total])
-                        # -------------------------------------------------
+                    df_sum_total = pl.DataFrame([summary_total], schema=df_summary.schema)
+                    df_summary = pl.concat([df_summary, df_sum_total])
 
-                        df_unclaimed.write_excel(workbook, worksheet="Нераспределенное", autofit=True)
+                    df_summary.write_excel(sys_wb, worksheet="Сводный отчет", autofit=True, column_formats=get_column_formats(df_summary.columns))
 
-                 
-                    for worksheet in workbook.worksheets():
-                        worksheet.set_row(0, 25, header_format)                     # Делаем жирной шапку
-                        worksheet.set_row(worksheet.dim_rowmax, None, total_format) # Делаем жирным ИТОГО    
+                # Запись нераспределенного
+                if df_unclaimed.height > 0:
+                    df_unclaimed = df_unclaimed.with_columns(pl.col("Отчет код лейбла").cast(pl.Utf8))
+                    unclaimed_total = {col: None for col in df_unclaimed.columns}
+                    unclaimed_total["Отчет код лейбла"] = "ИТОГО"
+                    
+                    if "Сумма выплат" in df_unclaimed.columns:
+                        unclaimed_total["Сумма выплат"] = df_unclaimed["Сумма выплат"].sum()
+                        
+                    df_uncl_total = pl.DataFrame([unclaimed_total], schema=df_unclaimed.schema)
+                    df_unclaimed = pl.concat([df_unclaimed, df_uncl_total])
 
-                return {"status": "success", "output_file": output_path}
+                    df_unclaimed.write_excel(sys_wb, worksheet="Нераспределенное", autofit=True, column_formats=get_column_formats(df_unclaimed.columns))
 
-        except Exception as e:
-            print(f"❌ Ошибка: {str(e)}")
-            return {"status": "error", "message": str(e)}
+                # Красим финальные системные листы
+                apply_final_formats(sys_wb)
+
+            # ---------- 6. Закрытие файловых дескрипторов ----------
+            if is_momu_mode and sys_wb:
+                sys_wb.close()
+            if not is_momu_mode and std_wb:
+                std_wb.close()
+
+            return {"status": "success", "rows_exported": len(df_base), "output_files": output_files}
+
+    except Exception as e:
+        print(f"❌ Ошибка в _core_export_distribution: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+
 
 
