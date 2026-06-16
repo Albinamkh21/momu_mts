@@ -20,3 +20,6 @@ CREATE TABLE report_track_rights_distribution (
 -- Индексы для моментальной выборки при экспорте
 CREATE INDEX idx_rights_dist_report ON report_track_rights_distribution(report_id);
 
+
+
+
