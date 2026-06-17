@@ -2221,7 +2221,17 @@ def export_report_distribution_to_excel(
                     AND rtrd.report_id = r.id
                 )
             """)
-            df_unclaimed = pl.read_database(unclaimed_query, conn, execute_options={"parameters": query_params})
+            df_unclaimed = pl.read_database(unclaimed_query, conn, execute_options={"parameters": query_params},
+                schema_overrides={
+                        "staging_id": pl.Int64,
+                        "Отчет код лейбла": pl.String,    
+                        "Отчет ISRC": pl.String,
+                        "Отчет название трека": pl.String,
+                        "Отчет исполнитель": pl.String,
+                        "Отчет авторы": pl.String,
+                        "Кол-во прослушиваний": pl.Int64,   
+                        "Сумма выплат": pl.Float64          
+                    })
             print("Собрали нераспределенные треки...")
             TaskProgress.emit(getattr(current_task.request, 'id', None), "Собрали нераспределенные треки...Начинаем подготовку к экспорту...")
 
