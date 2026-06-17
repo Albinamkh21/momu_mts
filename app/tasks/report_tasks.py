@@ -1506,8 +1506,8 @@ def create_report_task(partner_id: Optional[int] = None, year: int = None, month
         calculate_report_data(task_id, year, month_from, month_to, right_category_id, right_usage_type_id, labels_list)
         
         # Этап 2: Экспорт в файл
-        print(f"⏳ Этап 2: Экспорт данных в файл")
-        TaskProgress.emit(task_id, "⏳ Этап 2: Экспорт данных в файл")
+        print(f"⏳ Этап 2: Старт экспорта данных ")
+        TaskProgress.emit(task_id, "⏳ Этап 2: Старт экспорта данных ")
 
         is_momu = labels_list and len(labels_list) == 1 and labels_list[0] == 27
         export_report_distribution_to_excel(task_id, partner_id, year, month_from, month_to, right_category_id, right_usage_type_id, labels_list, is_momu)
@@ -2121,14 +2121,14 @@ def export_report_distribution_to_excel(
         # ---------- 2. Запрос базовых данных ----------
         base_query = text(f"""
             SELECT DISTINCT
-                ra.id AS staging_id,
-                ra.label_own_code AS "Отчет код лейбла",
-                ra.isrc AS "Отчет ISRC",
+                ra.id AS staging_id, 
+                ra.label_own_code::VARCHAR AS "Отчет код лейбла",
+                ra.isrc::VARCHAR AS "Отчет ISRC",
                 ra.track_name AS "Отчет название трека",
                 ra.artist_name AS "Отчет исполнитель",
                 ra.authors AS "Отчет авторы",
-                MAX(t.label_own_code) AS "Код лейбла",
-                MAX(t.isrc) AS "Код ISRC",
+                MAX(t.label_own_code)::VARCHAR AS "Код лейбла",
+                MAX(t.isrc)::VARCHAR AS "Код ISRC",
                 MAX(t.track_name) AS "Название трека",
                 MAX(t.artist_name) AS "Исполнитель",
                 MAX(t.composer) AS "Автор музыки",
@@ -2157,11 +2157,14 @@ def export_report_distribution_to_excel(
 
             if not df_base.is_empty():
                 df_base = df_base.with_columns(pl.col(pl.Object).cast(pl.Utf8))
+                
             else:
+                print("Данных для экспорта не найдено")
+                TaskProgress.emit(getattr(current_task.request, 'id', None), "Данных для экспорта не найдено")
                 return {"status": "success", "rows_exported": 0, "output_files": []}
 
-            print("Сбор базы завершён, собираем распределённые права...")
-            TaskProgress.emit(getattr(current_task.request, 'id', None), "Сбор базы завершён, загружаем права...")
+            print("Сбор основных данных завершён, собираем распределённые права...")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), "Сбор основных данных завершён, собираем  права...")
 
             staging_ids = df_base["staging_id"].to_list()
             query_params["staging_ids"] = staging_ids
@@ -2189,13 +2192,16 @@ def export_report_distribution_to_excel(
             """)
             
             df_rights = pl.read_database(rights_query, conn, execute_options={"parameters": query_params})
+            print("Собрали права...")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), "Собрали права... Переходим к сбору нераспределенных треков...")
+
 
             # Запрос нераспределенных треков
             unclaimed_query = text(f"""
                 SELECT 
                     ra.id AS staging_id,
-                    ra.label_own_code AS "Отчет код лейбла",
-                    ra.isrc AS "Отчет ISRC",
+                    ra.label_own_code::VARCHAR AS "Отчет код лейбла",
+                    ra.isrc::VARCHAR AS "Отчет ISRC",
                     ra.track_name AS "Отчет название трека",
                     ra.artist_name AS "Отчет исполнитель",
                     ra.authors AS "Отчет авторы",
@@ -2216,6 +2222,9 @@ def export_report_distribution_to_excel(
                 )
             """)
             df_unclaimed = pl.read_database(unclaimed_query, conn, execute_options={"parameters": query_params})
+            print("Собрали нераспределенные треки...")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), "Собрали нераспределенные треки...Начинаем подготовку к экспорту...")
+
 
             meta_row = conn.execute(text(f"""
                 SELECT
@@ -2253,7 +2262,7 @@ def export_report_distribution_to_excel(
                 total_format = wb.add_format({'bold': True, 'font_size': 12})
                 for worksheet in wb.worksheets():
                     if worksheet.dim_colmax is not None:
-                        worksheet.set_column(0, worksheet.dim_colmax, 30)
+                        worksheet.set_column(0, worksheet.dim_colmax, 15)
                     worksheet.set_row(0, 25, header_format) 
                     worksheet.set_row(worksheet.dim_rowmax, None, total_format)
 
@@ -2382,6 +2391,7 @@ def export_report_distribution_to_excel(
 
     except Exception as e:
         print(f"❌ Ошибка в _core_export_distribution: {str(e)}")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Ошибка: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 

@@ -209,6 +209,25 @@ export function CreateReportPage() {
               <option key={l.id} value={l.id}>{l.label}</option>
             ))}
           </select>
+          {selectedLabelIds.length > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
+              <button
+                type="button"
+                onClick={() => setSelectedLabelIds([])}
+                style={{
+                  padding: '4px 12px',
+                  fontSize: '12px',
+                  backgroundColor: '#f0f0f0',
+                  border: '1px solid #ddd',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                Очистить
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="form-group">
