@@ -680,16 +680,19 @@ def delete_data_from_all_dictionaries_by_label(self, label_id: int):
 
             }
 
-
+        with engine.begin() as conn:
             #обновляем материализованное представление, чтобы не было рассинхрона
-            conn.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_catalog_flat; "))
-            conn.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_track_extended; "))
-            print(f"🏁 Представления обновлены.")
+           TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Начинаем обновление представлений.") 
+           conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_extended; "))
+           conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights_prev; "))
+           conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights; "))
+           print(f"🏁 Представления обновлены.")
+           TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Представления обновлены.")
 
 
-            print(f"🏁 Удаление по лейблу {label_id} завершено: {stats}")
-            TaskProgress.emit(task_id, f"🏁 Удаление по лейблу {label_id} завершено: {stats}")
-            return {"status": "success", "label_id": label_id, "deleted": stats}
+        print(f"🏁 Удаление по лейблу {label_id} завершено: {stats}")
+        TaskProgress.emit(task_id, f"🏁 Удаление по лейблу {label_id} завершено: {stats}")
+        return {"status": "success", "label_id": label_id, "deleted": stats}
 
     except Exception as e:
         print(f"❌ Ошибка удаления по лейблу: {e}")

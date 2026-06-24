@@ -731,10 +731,13 @@ def sync_catalog_dictionaries(self, prev_result, version="v2"):
                 }
             }
         with engine.begin() as conn:
-           conn.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_catalog_flat; "))
-           conn.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_track_extended; "))
+           TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Начинаем обновление представлений.") 
+           conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_extended; "))
+           conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights_prev; "))
+           conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights; "))
+       
            print(f"🏁 Представления обновлены.")
-           TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Загружка каталога завершена полностью.")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Загружка каталога завершена полностью.")
     except Exception as e:
         print(f"[v2] ❌ Ошибка заполнения справочников: {e}")
         TaskProgress.emit(task_id, f"[v2] ❌ Ошибка заполнения справочников: {e}")
