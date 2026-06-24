@@ -665,3 +665,48 @@ CREATE INDEX idx_report_track_rights_track_id ON  report_track_rights_cache(trac
 
 
 insert into finding_source values(10, 'ISRC+LABEL_CODE', 'ISRC+LABEL_CODE');
+
+
+
+
+CREATE MATERIALIZED VIEW mv_unified_track_rights AS
+WITH base_rights AS (
+    -- Агрегируем права по каждому track_id
+    SELECT 
+        tr.track_id,
+        MAX(CASE WHEN tr.right_category_id = 2 AND tr.right_usage_type_id = 4 THEN tr.share_percentage ELSE 0 END) AS r_int,
+        MAX(CASE WHEN tr.right_category_id = 2 AND tr.right_usage_type_id = 3 THEN tr.share_percentage ELSE 0 END) AS r_mob,
+        MAX(CASE WHEN tr.right_category_id = 2 AND tr.right_usage_type_id = 2 THEN tr.share_percentage ELSE 0 END) AS r_pub,
+        MAX(CASE WHEN tr.right_category_id = 1 AND tr.right_usage_type_id = 4 THEN tr.share_percentage ELSE 0 END) AS a_int,
+        MAX(CASE WHEN tr.right_category_id = 1 AND tr.right_usage_type_id = 3 THEN tr.share_percentage ELSE 0 END) AS a_mob,
+        MAX(CASE WHEN tr.right_category_id = 1 AND tr.right_usage_type_id = 2 THEN tr.share_percentage ELSE 0 END) AS a_pub
+    FROM track_right tr
+    GROUP BY tr.track_id
+)
+SELECT 
+    t.track_id,
+    t.label_own_code,
+    CASE WHEN t.label_own_code LIKE '%-%' 
+         THEN REGEXP_REPLACE(t.label_own_code, '-[A-Za-z0-9]+$', '') 
+         ELSE NULL END AS base_code,
+    -- Смежные права (берем только с самого трека)
+    COALESCE(br.r_int, 0) AS related_int,
+    COALESCE(br.r_mob, 0) AS related_mob,
+    COALESCE(br.r_pub, 0) AS related_pub,
+    -- Авторские права (приоритет: трек, если нет - берем сумму с альбома)
+    COALESCE(br.a_int, auth_base.a_int, 0) AS author_int,
+    COALESCE(br.a_mob, auth_base.a_mob, 0) AS author_mob,
+    COALESCE(br.a_pub, auth_base.a_pub, 0) AS author_pub
+FROM mv_track_extended t
+LEFT JOIN base_rights br ON br.track_id = t.track_id
+LEFT JOIN base_rights auth_base 
+    ON t.label_own_code LIKE '%-%' 
+    AND auth_base.track_id IN (SELECT id FROM track WHERE label_own_code = REGEXP_REPLACE(t.label_own_code, '-[A-Za-z0-9]+$', ''));
+
+-- Индексы для мгновенной работы
+CREATE UNIQUE INDEX idx_mv_unified_id ON mv_unified_track_rights(track_id);
+CREATE INDEX idx_mv_unified_base ON mv_unified_track_rights(base_code);
+
+SELECT schemaname, matviewname 
+FROM pg_matviews 
+WHERE schemaname = 'public';

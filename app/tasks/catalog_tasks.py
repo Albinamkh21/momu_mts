@@ -348,114 +348,50 @@ def build_standard_query(fields: str, group_by: str, where_clause: str) -> str:
     return f"""
         SELECT {fields} 
         FROM 
-        mv_track_extended t
-        JOIN track_right tr ON tr.track_id = t.track_id
+        mv_track_extended m
+        JOIN track_right tr ON tr.track_id = m.track_id
         JOIN right_holder rh ON rh.id = tr.right_holder_id
         JOIN label l ON l.id = rh.label_id
         {where_clause}
         {group_by} 
-        ORDER BY l.id, t.track_id;
+        ORDER BY m.label_id, m.track_id;
     """
 
 def build_unified_rights_query(where_clause: str, right_usage_type_id: int = None) -> str:
-    """Генератор для сложного аналитического запроса (separate_by_rights)"""
-    
-    right_usage_type_filter = ""    
-    share_percentage_value = 300
     if right_usage_type_id and right_usage_type_id != RightUsageType.ALL:
-        right_usage_type_filter = " AND sub_tr.right_usage_type_id = :rut_id ";
-        share_percentage_value = 100
-        rel_cols, auth_cols = [], []
-        if right_usage_type_id == RightUsageType.INT:
-            rel_cols.append("COALESCE(rel.r_int, 0) AS related_int")
-            auth_cols.append("COALESCE(auth_direct.r_int, auth_base.r_int, 0) AS author_int")
-        elif right_usage_type_id == RightUsageType.MOB:
-            rel_cols.append("COALESCE(rel.r_mob, 0) AS related_mob")
-            auth_cols.append("COALESCE(auth_direct.r_mob, auth_base.r_mob, 0) AS author_mob")
-        elif right_usage_type_id == RightUsageType.PUB:
-            rel_cols.append("COALESCE(rel.r_pub, 0) AS related_pub")
-            auth_cols.append("COALESCE(auth_direct.r_pub, auth_base.r_pub, 0) AS author_pub")
-        rel_sql = ",\n".join(rel_cols)
-        auth_sql = ",\n".join(auth_cols)
+        suffix = right_usage_type_id.name.lower()
+        rel_sql = f"COALESCE(ra.rel_{suffix}, 0) AS related_{suffix}"
+        auth_sql = f"COALESCE(ra.auth_{suffix}, 0) AS author_{suffix}"
+        filter_sql = f"ra.rel_{suffix} >= 100 AND ra.auth_{suffix} >= 100"
     else:
-        rel_sql = """COALESCE(rel.r_int, 0) AS related_int,
-            COALESCE(rel.r_mob, 0) AS related_mob,
-            COALESCE(rel.r_pub, 0) AS related_pub"""
-        auth_sql = """COALESCE(auth_direct.r_int, auth_base.r_int, 0) AS author_int,
-            COALESCE(auth_direct.r_mob, auth_base.r_mob, 0) AS author_mob,
-            COALESCE(auth_direct.r_pub, auth_base.r_pub, 0) AS author_pub"""
+        rel_sql = "COALESCE(ra.rel_int, 0) AS rel_int, COALESCE(ra.rel_mob, 0) AS rel_mob, COALESCE(ra.rel_pub, 0) AS rel_pub"
+        auth_sql = "COALESCE(ra.auth_int, 0) AS auth_int, COALESCE(ra.auth_mob, 0) AS auth_mob, COALESCE(ra.auth_pub, 0) AS auth_pub"
+        filter_sql = "(ra.rel_int + ra.rel_mob + ra.rel_pub) >= 300 AND (ra.auth_int + ra.auth_mob + ra.auth_pub) >= 300"
 
-    if not  where_clause :
-        where_clause = " where  "
-    else:   
-        where_clause += " AND "    
+    # Добавляем фильтрацию прав прямо в текущий WHERE
+    if where_clause and "WHERE" in where_clause.upper():
+        final_where = f"{where_clause} AND {filter_sql}"
+    elif where_clause:
+        final_where = f"WHERE {where_clause} AND {filter_sql}"
+    else:
+        final_where = f"WHERE {filter_sql}"
 
     return f"""
-        WITH all_rights AS (
-            SELECT 
-                tr.track_id,
-                t.label_own_code,
-                tr.right_category_id,
-                MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.INT} THEN tr.share_percentage ELSE 0 END) AS r_int,
-                MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.MOB} THEN tr.share_percentage ELSE 0 END) AS r_mob,
-                MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.PUB} THEN tr.share_percentage ELSE 0 END) AS r_pub,
-                string_agg(DISTINCT l.name, ', ') AS holders
-            FROM track_right tr
-            JOIN track t ON t.id = tr.track_id
-            JOIN right_holder rh ON rh.id = tr.right_holder_id
-            JOIN label l ON l.id = rh.label_id
-            WHERE tr.right_category_id IN ({RightCategory.AUTHOR}, {RightCategory.RELATED}) 
-              AND tr.share_percentage > 0
-            GROUP BY tr.track_id, t.label_own_code, tr.right_category_id
-        ),
-        filtered_tracks AS (
-            SELECT DISTINCT t.track_id
-            FROM mv_track_extended t
-            JOIN track_right tr ON tr.track_id = t.track_id
-            JOIN right_holder rh ON rh.id = tr.right_holder_id
-            JOIN label l ON l.id = rh.label_id
-            {where_clause}
-                   EXISTS (
-                    SELECT 1 
-                    FROM track_right sub_tr 
-                    WHERE sub_tr.track_id = t.track_id 
-                    {right_usage_type_filter}
-                    GROUP BY sub_tr.track_id 
-                    HAVING SUM(CASE WHEN sub_tr.right_category_id = {RightCategory.AUTHOR} THEN sub_tr.share_percentage ELSE 0 END) = {share_percentage_value}
-                    AND SUM(CASE WHEN sub_tr.right_category_id = {RightCategory.RELATED} THEN sub_tr.share_percentage ELSE 0 END) = {share_percentage_value}
-                )
-
-        ),
-        target_tracks AS (
-            SELECT 
-                m.*,
-                CASE WHEN m.label_own_code LIKE '%-%' 
-                     THEN REGEXP_REPLACE(m.label_own_code, '-[A-Za-z0-9]+$', '') 
-                     ELSE NULL 
-                END AS base_code
-            FROM mv_track_extended m
-            JOIN filtered_tracks ft ON ft.track_id = m.track_id
-        )
         SELECT 
-            t.label_own_code, t.upc, t.isrc, t.track_name,  t.artist_name, t.authors, t.composer, t.lyricist, t.album_name,
-           
+            m.label_own_code,
+            m.upc, m.isrc, m.track_name, m.artist_name,
+            m.authors, m.composer, m.lyricist, m.album_name,
             {rel_sql},
-            rel.holders AS copyright_holder,
-
-            COALESCE(auth_direct.label_own_code, auth_base.label_own_code) AS author_label_own_code,
+            ra.rel_holders AS copyright_holder_related,
+            ra.base_code,
             {auth_sql},
-            COALESCE(auth_direct.holders, auth_base.holders) AS copyright_holder, TO_CHAR(t.created_at::timestamp, 'DD-MM-YYYY') AS "Time period"
-
-        FROM target_tracks t
-        LEFT JOIN all_rights rel 
-            ON rel.track_id = t.track_id AND rel.right_category_id = {RightCategory.RELATED}
-        LEFT JOIN all_rights auth_direct 
-            ON auth_direct.track_id = t.track_id AND auth_direct.right_category_id = {RightCategory.AUTHOR}
-        LEFT JOIN all_rights auth_base 
-            ON auth_direct.track_id IS NULL AND t.base_code IS NOT NULL 
-           AND auth_base.label_own_code = t.base_code AND auth_base.right_category_id = {RightCategory.AUTHOR}
-        ORDER BY t.label_id, t.track_id;
-    """
+            ra.auth_holders AS copyright_holder_author,
+            TO_CHAR(m.created_at::timestamp, 'DD-MM-YYYY') AS "Time period"
+        FROM mv_track_extended m
+        JOIN mv_track_rights ra ON ra.track_id = m.track_id
+        {final_where}
+        ORDER BY m.label_id, ra.base_code;
+    """  
 
 @celery_app.task(name="export_normalized_catalog_to_flat", bind=True)
 def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: int = None, right_usage_type_id: int = None, export_format: str = "default"):
@@ -482,18 +418,18 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
 
    
     # 1. Списки колонок для разных форматов и типов прав
-    fields_default = f""" t.track_id, t.label_own_code, t.upc, t.isrc, t.track_name, t.artist_name, t.composer, t.lyricist, t.authors,
+    fields_default = f""" m.track_id, m.label_own_code, m.upc, m.isrc, m.track_name, m.artist_name, m.composer, m.lyricist, m.authors,
            {columns_sql},
             l.name AS copyright_holder
 
     """
     
 
-    fields_related = f"""  t.label_own_code , t.upc, t.isrc, t.track_name, t.artist_name,  t.authors, t.composer, t.lyricist, t.album_name,
+    fields_related = f"""  m.label_own_code , m.upc, m.isrc, m.track_name, m.artist_name,  m.authors, m.composer, m.lyricist, m.album_name,
            {columns_sql},
             l.name AS copyright_holder """
 
-    fields_author = f""" t.track_id, t.label_own_code, t.track_name, t.artist_name,  t.authors, t.composer, t.lyricist, 
+    fields_author = f""" m.track_id, m.label_own_code, m.track_name, m.artist_name,  m.authors, m.composer, m.lyricist, 
            {columns_sql},
             l.name AS copyright_holder """
                     
@@ -514,8 +450,8 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
     }
    
     group_clause = {
-        "default": " GROUP BY  t.track_id, t.label_own_code, t.upc, t.isrc, t.track_name, t.artist_name, t.composer, t.lyricist, t.authors, l.name, l.id ",
-        "separate_by_rights": " GROUP BY  t.track_id, t.label_own_code, t.upc, t.isrc, t.track_name, t.artist_name,  t.authors, t.composer, t.lyricist, t.album_name, l.name, l.id ",
+        "default": " GROUP BY  m.track_id, m.label_own_code, m.upc, m.isrc, m.track_name, m.artist_name, m.composer, m.lyricist, m.authors, l.name, m.label_id ",
+        "separate_by_rights": " GROUP BY  m.track_id, m.label_own_code, m.upc, m.isrc, m.track_name, m.artist_name,  m.authors, m.composer, m.lyricist, m.album_name, l.name, m.label_id ",
         "100plus100": "SELECT * FROM mv_catalog_100plus"
     }
 
@@ -524,7 +460,7 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
    # 2. Фильтры (БАЗОВЫЕ)
     where_parts_base, params_base = [], {}
     if label_id:
-        where_parts_base.append("l.id = :label_id")
+        where_parts_base.append("m.label_id = :label_id")
         params_base["label_id"] = label_id
     if right_usage_type_id and right_usage_type_id != RightUsageType.ALL:
         where_parts_base.append(" (tr.right_usage_type_id = :rut_id and share_percentage > 0 )")
