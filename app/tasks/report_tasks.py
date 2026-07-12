@@ -98,7 +98,7 @@ def process_report_file(file_path: str, upload_id: str):
             "row_number", "label_own_code", "isrc", "track_name",
             "artist_name", "composer", "lyricist", "authors",
             "author_share_pct", "related_share_pct", "play_count",
-            "payout_amount", "price_per_play", "service_name"
+            "payout_amount", "price_per_play", "service_name", "period", "payout_amount_author", "payout_amount_related"
         ]
 
         total_rows = len(df)
@@ -418,6 +418,9 @@ def export_report_to_excel(partner_id: int, right_category_id: int, right_usage_
             s.play_count AS "Кол-во прослушиваний",
             s.payout_amount AS "Сумма выплат",
             s.price_per_play AS "Цена за прослушивание",
+            s.period AS "Период",
+            s.payout_amount_author AS "Выплата авторские",
+            s.payout_amount_related AS "Выплата смежные",
             fs.code AS "Источник совпадения"
         FROM staging_report_agg s
         JOIN report r on r.upload_id = s.upload_id 
@@ -685,7 +688,7 @@ def process_full_report_pipeline(file_path: str, partner_id: int, right_category
             
     
         
-        # Экспорт данных в Excel уже после коммита, чтобы не держать транзакцию открытой во время экспорта
+    
         export_result = export_report_to_excel(partner_id, right_category_id, right_usage_type_id, month, year, upload_id)
         if export_result.get("status") != "success":
             return {"status": "error", "message": export_result.get("message")}
@@ -747,7 +750,10 @@ def group_report_data(connection, group_data: bool = True, upload_id: str  = Non
                     service_name,
                     play_count,
                     payout_amount,
-                    price_per_play
+                    price_per_play,
+                    period,
+                    payout_amount_author,
+                    payout_amount_related
                 )
                 SELECT 
                     :uid,
@@ -759,7 +765,10 @@ def group_report_data(connection, group_data: bool = True, upload_id: str  = Non
                     service_name,
                     SUM(COALESCE(NULLIF(play_count, '')::INT, 0)) as total_plays,
                     SUM(COALESCE(NULLIF(payout_amount, '')::NUMERIC(20, 8), 0)) as total_payout,
-                    AVG(NULLIF(COALESCE(NULLIF(price_per_play, '')::NUMERIC(20, 8), 0), 0)) as avg_price
+                    AVG(NULLIF(COALESCE(NULLIF(price_per_play, '')::NUMERIC(20, 8), 0), 0)) as avg_price,
+                    MAX(period) as period,
+                    SUM(COALESCE(NULLIF(payout_amount_author, '')::NUMERIC(20, 8), 0)) as total_payout_author,
+                    SUM(COALESCE(NULLIF(payout_amount_related, '')::NUMERIC(20, 8), 0)) as total_payout_related
                 FROM staging_report
                 WHERE upload_id = :uid
                 GROUP BY label_own_code, isrc, track_name, artist_name,
@@ -779,7 +788,10 @@ def group_report_data(connection, group_data: bool = True, upload_id: str  = Non
                     service_name,
                     play_count,
                     payout_amount,
-                    price_per_play
+                    price_per_play,
+                    period,
+                    payout_amount_author,
+                    payout_amount_related
                 )
                 SELECT 
                     :uid,
@@ -792,7 +804,10 @@ def group_report_data(connection, group_data: bool = True, upload_id: str  = Non
                     service_name,
                     COALESCE(NULLIF(play_count, '')::INT, 0),
                     COALESCE(NULLIF(payout_amount, '')::NUMERIC(20, 8), 0),
-                    NULLIF(COALESCE(NULLIF(price_per_play, '')::NUMERIC(20, 8), 0), 0)
+                    NULLIF(COALESCE(NULLIF(price_per_play, '')::NUMERIC(20, 8), 0), 0),
+                    period,
+                    COALESCE(NULLIF(payout_amount_author, '')::NUMERIC(20, 8), 0),
+                    COALESCE(NULLIF(payout_amount_related, '')::NUMERIC(20, 8), 0)
                 FROM staging_report where upload_id = :uid
                 ORDER BY COALESCE(NULLIF(row_number, '')::INT, 0);
                 """)
@@ -829,7 +844,7 @@ def find_lost_track():
         WHERE t.id IS NULL;
         """
 
-        query = """ select  track_name, artist_name, authors, isrc, label_own_code, payout_amount  from staging_report_agg  where isFound = false order by payout_amount desc;
+        query = """ select  track_name, artist_name, authors, isrc, label_own_code, payout_amount, period, payout_amount_author, payout_amount_related  from staging_report_agg  where isFound = false order by payout_amount desc;
         """
 
         with engine.connect() as conn:
@@ -1353,7 +1368,9 @@ def calculate_report_data(task_id: str, year: int, month_from: int, month_to: in
                 rtc.right_usage_type_id, rtc.share_percentage,
                 r.id AS report_id,
                 r.right_category_id AS report_category,
-                sra.payout_amount AS src_amount
+                sra.payout_amount AS src_amount,
+                sra.payout_amount_author AS src_amount_author,     
+                sra.payout_amount_related AS src_amount_related
             FROM report r 
             JOIN staging_report_agg sra ON r.upload_id = sra.upload_id
             JOIN report_track_rights_cache rtc ON rtc.staging_id = sra.id
@@ -1396,26 +1413,41 @@ def calculate_report_data(task_id: str, year: int, month_from: int, month_to: in
         )
         INSERT INTO report_track_rights_distribution (
             report_id, staging_id, track_id, right_holder_id, right_category_id, right_usage_type_id,
-            original_share_percentage, calculated_share_percentage, is_normalized, final_payout_amount
+            original_share_percentage, calculated_share_percentage, final_payout_amount
         )
         SELECT 
             c.report_id, c.staging_id, c.track_id, c.right_holder_id, c.right_category_id, c.right_usage_type_id,
             c.share_percentage, c.calc_share,
-            (c.total_found_shares != 100),
+          
             CASE 
                 -- 1. Если отчет целевой (Смежка=2 или Авторские=1) — отдаем 100% денег совпавшей категории
                 WHEN c.report_category IN (1, 2) AND c.right_category_id = c.report_category
                     THEN c.src_amount * (c.calc_share / 100.0)
+
+
+                WHEN c.report_category = 3 THEN 
+                    CASE 
+                        -- СЦЕНАРИЙ А: В базе ЕСТЬ раздельные суммы (!= 0 страхует от отрицательных сумм корректировок)
+                        WHEN COALESCE(c.src_amount_author, 0) != 0 OR COALESCE(c.src_amount_related, 0) != 0 THEN 
+                            CASE 
+                                WHEN c.right_category_id = 1 THEN COALESCE(c.src_amount_author, 0) * (c.calc_share / 100.0)
+                                WHEN c.right_category_id = 2 THEN COALESCE(c.src_amount_related, 0) * (c.calc_share / 100.0)
+                                ELSE 0 
+                            END
+                            
+                        -- СЦЕНАРИЙ Б: Раздельных сумм НЕТ. Но база нашла и живых авторов, и живую смежку
+                        WHEN c.live_categories_count = 2 THEN 
+                            (COALESCE(c.src_amount, 0) * 0.5) * (c.calc_share / 100.0)
+                            
+                        -- СЦЕНАРИЙ В: Раздельных сумм НЕТ, но живая категория в базе только ОДНА
+                        ELSE 
+                            COALESCE(c.src_amount, 0) * (c.calc_share / 100.0)
+                    END
                 
-                -- 2. Если отчет BOTH (3) И база нашла РЕАЛЬНО и авторов, и смежку с долями > 0 (как в первом кейсе)
-                -- Только в этом случае делим сумму 50/50!
-                WHEN c.report_category = 3 AND c.live_categories_count = 2
-                    THEN (c.src_amount * 0.5) * (c.calc_share / 100.0)
                 
-                -- 3. Во всех остальных случаях для BOTH (когда живая категория только одна, как во втором кейсе)
-                -- Возвращаем твою старую логику: отдаем все 100% денег живой категории
-                WHEN c.report_category = 3 
-                    THEN c.src_amount * (c.calc_share / 100.0)
+                
+               
+            
                 
                 ELSE 0
             END AS final_payout_amount
@@ -2137,7 +2169,8 @@ def export_report_distribution_to_excel(
                 ra.play_count AS "Кол-во прослушиваний",
                 ra.payout_amount AS "Сумма выплат",
                 ra.price_per_play AS "Цена за прослушивание",
-                ra.service_name AS "Сервис"
+                ra.service_name AS "Сервис",
+                ra.period AS "Период"
             FROM staging_report_agg ra
             JOIN report r ON r.upload_id = ra.upload_id
             JOIN report_track_rights_cache rtc ON rtc.staging_id = ra.id
@@ -2206,7 +2239,11 @@ def export_report_distribution_to_excel(
                     ra.artist_name AS "Отчет исполнитель",
                     ra.authors AS "Отчет авторы",
                     ra.play_count AS "Кол-во прослушиваний",
-                    ra.payout_amount AS "Сумма выплат"
+                    ra.payout_amount AS "Сумма выплат",
+                    ra.payout_amount_author AS "Сумма выплат автор",
+                    ra.payout_amount_related AS "Сумма выплат смежка",
+                    ra.service_name AS "Сервис",
+                    ra.period AS "Период"
                 FROM staging_report_agg ra
                 JOIN report r ON r.upload_id = ra.upload_id
                 WHERE r.report_year = :year
@@ -2230,7 +2267,9 @@ def export_report_distribution_to_excel(
                         "Отчет исполнитель": pl.String,
                         "Отчет авторы": pl.String,
                         "Кол-во прослушиваний": pl.Int64,   
-                        "Сумма выплат": pl.Float64          
+                        "Сумма выплат": pl.Float64 , 
+                        "Сумма выплат автор": pl.Float64,
+                        "Сумма выплат смежка": pl.Float64           
                     })
             print("Собрали нераспределенные треки...")
             TaskProgress.emit(getattr(current_task.request, 'id', None), "Собрали нераспределенные треки...Начинаем подготовку к экспорту...")
@@ -2382,6 +2421,10 @@ def export_report_distribution_to_excel(
                     
                     if "Сумма выплат" in df_unclaimed.columns:
                         unclaimed_total["Сумма выплат"] = df_unclaimed["Сумма выплат"].sum()
+
+                    for col in ["Сумма выплат автор", "Сумма выплат смежка"]:
+                        if col in df_unclaimed.columns:
+                            unclaimed_total[col] = df_unclaimed[col].sum()    
                         
                     df_uncl_total = pl.DataFrame([unclaimed_total], schema=df_unclaimed.schema)
                     df_unclaimed = pl.concat([df_unclaimed, df_uncl_total])

@@ -1,3 +1,6 @@
+
+
+
 CREATE INDEX idx_track_right_perf ON track_right (right_usage_type_id, track_id, right_category_id, share_percentage);
 
 
@@ -23,7 +26,7 @@ CREATE INDEX idx_rights_dist_report ON report_track_rights_distribution(report_i
 CREATE INDEX IF NOT EXISTS idx_rtrd_report_staging ON report_track_rights_distribution (report_id, staging_id);
 
 
-//24/06/2026
+
 
 CREATE MATERIALIZED VIEW mv_track_rights_prev AS
 SELECT 
@@ -97,7 +100,7 @@ CREATE UNIQUE INDEX idx_mv_track_rights__track_id ON mv_track_rights(track_id);
 
 CREATE INDEX IF NOT EXISTS idx_mv_track_extended_sort ON mv_track_extended(label_id, track_id);
 CREATE INDEX IF NOT EXISTS idx_mv_track_rights_sort ON mv_track_rights(base_code);
-
+SET work_mem = '256MB';
 
 
 

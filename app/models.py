@@ -328,6 +328,9 @@ t_staging_report = Table(
     Column('price_per_play', Text),
     Column('service_name', Text),
     Column('upload_id', Text),
+    Column('period', Text),
+    Column('payout_amount_author', Text),
+    Column('payout_amount_related', Text),
     Index('idx_staging_report_upload_id', 'upload_id')
 )
 
@@ -361,6 +364,10 @@ class StagingReportAgg(Base):
     authors_tokens: Mapped[Optional[list[str]]] = mapped_column(ARRAY(Text()))
     authors_norm_key_full: Mapped[Optional[str]] = mapped_column(Text)
     upload_id: Mapped[Optional[str]] = mapped_column(Text)
+  
+    period: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    payout_amount_author: Mapped[Optional[decimal.Decimal]] = mapped_column(Numeric(precision=20, scale=8), server_default=text('0.0'), nullable=True )
+    payout_amount_related: Mapped[Optional[decimal.Decimal]] = mapped_column( Numeric(precision=20, scale=8), server_default=text('0.0'), nullable=True)
 
     report_track_rights_cache: Mapped[list['ReportTrackRightsCache']] = relationship('ReportTrackRightsCache', back_populates='staging')
 
@@ -663,3 +670,20 @@ class TrackRight(Base):
     right_holder: Mapped[Optional['RightHolder']] = relationship('RightHolder', back_populates='track_right')
     right_usage_type: Mapped[Optional['RightUsageType']] = relationship('RightUsageType', back_populates='track_right')
     track: Mapped['Track'] = relationship('Track', back_populates='track_right')
+
+class ReportTrackRightsDistribution(Base):
+    __tablename__ = 'report_track_rights_distribution'
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    report_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    staging_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    track_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    right_holder_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    right_category_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    right_usage_type_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    
+    original_share_percentage: Mapped[decimal.Decimal] = mapped_column(Numeric(10, 4), nullable=False)
+    calculated_share_percentage: Mapped[decimal.Decimal] = mapped_column(Numeric(10, 4), nullable=False)
+    final_payout_amount: Mapped[decimal.Decimal] = mapped_column(Numeric(15, 6), nullable=False)
+    is_normalized: Mapped[Optional[bool]] = mapped_column(Boolean, server_default=text('FALSE'))
+    created_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, server_default=text('CURRENT_TIMESTAMP'))
