@@ -28,16 +28,23 @@ function App() {
   };
 
   return (
-    <MainLayout currentPage={page.type} onMenuClick={(mod) => mod === 'catalog' ? goToCatalog() : (mod === 'report' ? goToReport() : (mod === 'createReport' ? goToCreateReport() : goToTracks()))}>
-      
+    <MainLayout
+      currentPage={page.type}
+      onMenuClick={(mod) => {
+        if (mod === 'catalog') goToCatalog();
+        else if (mod === 'report') goToReport();
+        else if (mod === 'createReport') goToCreateReport();
+        else goToTracks();
+      }}
+    >
       {page.type === 'track' && (
         <TrackDetailPage trackId={page.id} onBack={goBack} onPersonClick={goToPerson} />
       )}
-      
+
       {page.type === 'person' && (
         <PersonDetailPage personId={page.id} onBack={goBack} onTrackClick={goToTrack} />
       )}
-      
+
       {page.type === 'catalog' && (
         <CatalogPage />
       )}
@@ -49,7 +56,7 @@ function App() {
       {page.type === 'createReport' && (
         <CreateReportPage />
       )}
-      
+
       {page.type === 'list' && (
         <TracksPage onTrackClick={goToTrack} />
       )}

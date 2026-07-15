@@ -6,6 +6,7 @@ from pydantic import BaseModel
 import logging
 
 from core.database import SessionLocal
+from tasks.report_tasks import _normalize_name
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -308,6 +309,31 @@ def get_track_detail(track_id: int = Path(...), db: Session = Depends(get_db)):
         "persons": persons,
         "rights": rights_result,
     }
+
+
+@router.post("/persons", status_code=201)
+def create_person(body: PersonUpdate, db: Session = Depends(get_db)):
+    name = body.full_name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="full_name is required")
+
+    existing = db.execute(
+        text("SELECT id, full_name FROM person WHERE full_name = :name"),
+        {"name": name},
+    ).fetchone()
+    if existing:
+        return {"id": existing.id, "full_name": existing.full_name}
+
+    tokens, norm_key_full = _normalize_name(name)
+    result = db.execute(
+        text(
+            "INSERT INTO person (full_name, norm_key_full, tokens) "
+            "VALUES (:name, :norm, :tokens) RETURNING id, full_name"
+        ),
+        {"name": name, "norm": norm_key_full, "tokens": tokens},
+    ).fetchone()
+    db.commit()
+    return {"id": result.id, "full_name": result.full_name}
 
 
 @router.get("/persons/{person_id}")

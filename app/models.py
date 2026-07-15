@@ -671,6 +671,23 @@ class TrackRight(Base):
     right_usage_type: Mapped[Optional['RightUsageType']] = relationship('RightUsageType', back_populates='track_right')
     track: Mapped['Track'] = relationship('Track', back_populates='track_right')
 
+class UITrackDraft(Base):
+    __tablename__ = 'ui_track_drafts'
+    __table_args__ = (
+        ForeignKeyConstraint(['track_id'], ['track.id'], ondelete='CASCADE', name='ui_track_drafts_track_id_fkey'),
+        PrimaryKeyConstraint('id', name='ui_track_drafts_pkey'),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, server_default=text('gen_random_uuid()'))
+    user_id: Mapped[Optional[int]] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, server_default=text("'draft'"))
+    payload: Mapped[Optional[dict]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    # Set when this draft edits an existing track (as opposed to creating a new one).
+    track_id: Mapped[Optional[int]] = mapped_column(BigInteger)
+    created_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
+    updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
+
+
 class ReportTrackRightsDistribution(Base):
     __tablename__ = 'report_track_rights_distribution'
 

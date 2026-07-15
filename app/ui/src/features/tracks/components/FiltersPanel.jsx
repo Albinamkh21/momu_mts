@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-export const FiltersPanel = ({ filters, onChange, onSearch, loading, labels }) => {
+export const FiltersPanel = ({ filters, onChange, onSearch, loading, labels, onAddTrack }) => {
   const [collapsed, setCollapsed] = useState(false);
 
   const set = (key) => (e) => onChange({ ...filters, [key]: e.target.value });
@@ -11,11 +11,18 @@ export const FiltersPanel = ({ filters, onChange, onSearch, loading, labels }) =
 
   return (
     <div className={`filters-panel ${collapsed ? 'filters-panel--collapsed' : ''}`}>
-      <div className="filters-header" onClick={() => setCollapsed(!collapsed)}>
-        <span className="filters-header__title">Фильтры</span>
-        <span className={`filters-header__arrow ${collapsed ? 'filters-header__arrow--down' : 'filters-header__arrow--up'}`}>
-          ▲
-        </span>
+      <div className="filters-header">
+        <div onClick={() => setCollapsed(!collapsed)} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+          <span className="filters-header__title">Фильтры</span>
+          <span className={`filters-header__arrow ${collapsed ? 'filters-header__arrow--down' : 'filters-header__arrow--up'}`}>
+            ▲
+          </span>
+        </div>
+        {onAddTrack && (
+          <button className="btn-primary" onClick={(e) => { e.stopPropagation(); onAddTrack(); }}>
+            ➕ Новый трек
+          </button>
+        )}
       </div>
 
       <div className={`filters-body ${collapsed ? 'filters-body--hidden' : ''}`}>

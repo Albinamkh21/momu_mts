@@ -242,3 +242,343 @@ select[multiple] option:checked {
   background: var(--active-color);
   color: white;
 }
+
+/* ─── Track Wizard ─────────────────────────────────────────────────────────── */
+
+.wizard-container {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.wizard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.wizard-header h2 { margin: 0; }
+
+.wizard-progress {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.wizard-step-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.9rem;
+  border-radius: 20px;
+  background: #e2e8f0;
+  color: #64748b;
+  font-size: 0.85rem;
+  font-weight: 500;
+  flex: 1;
+  justify-content: center;
+}
+
+.wizard-step-tab.active {
+  background: var(--active-color);
+  color: #fff;
+}
+
+.wizard-step-tab.done {
+  background: #bbf7d0;
+  color: #166534;
+}
+
+.step-number {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.35);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.wizard-body {
+  background: #fff;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1.5rem;
+  min-height: 300px;
+}
+
+.wizard-step h3 { margin-top: 0; }
+
+.wizard-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.wizard-error {
+  background: #fee2e2;
+  border: 1px solid #fca5a5;
+  border-radius: 6px;
+  color: #991b1b;
+  padding: 0.75rem 1rem;
+  font-size: 0.9rem;
+}
+
+.wizard-success {
+  text-align: center;
+  padding: 3rem 1rem;
+}
+
+/* ─── Shared form helpers ───────────────────────────────────────────────────── */
+
+.form-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #475569;
+  margin-bottom: 1rem;
+}
+
+.checkbox-label {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.form-input {
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-input);
+  font-size: 0.9rem;
+  font-family: inherit;
+  color: var(--text-main);
+  transition: border-color 0.15s;
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: var(--active-color);
+  background: #fff;
+}
+
+.radio-group {
+  display: flex;
+  gap: 1.5rem;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
+.radio-group label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+}
+
+.new-release-form {
+  padding: 1rem;
+  background: #f8fafc;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
+/* ─── Contributors / Rights tables ─────────────────────────────────────────── */
+
+.contributors-table,
+.rights-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  margin-bottom: 0.75rem;
+}
+
+.contributors-table th,
+.contributors-table td,
+.rights-table th,
+.rights-table td {
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid #f1f5f9;
+  text-align: left;
+}
+
+.contributors-table th,
+.rights-table th {
+  color: #64748b;
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.add-buttons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.btn-add {
+  padding: 0.35rem 0.75rem;
+  border: 1px dashed var(--active-color);
+  border-radius: 6px;
+  color: var(--active-color);
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-family: inherit;
+  transition: background 0.15s;
+}
+
+.btn-add:hover { background: #eff6ff; }
+
+.btn-sm {
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: #f1f5f9;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-family: inherit;
+  margin-left: 0.25rem;
+}
+
+.btn-danger { border-color: #fca5a5; color: #dc2626; background: #fff5f5; }
+.btn-danger:hover { background: #fee2e2; }
+
+.btn-primary {
+  padding: 0.5rem 1.25rem;
+  background: var(--active-color);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-family: inherit;
+  font-weight: 500;
+  transition: opacity 0.15s;
+}
+
+.btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn-primary:hover:not(:disabled) { opacity: 0.88; }
+
+.btn-secondary {
+  padding: 0.5rem 1.25rem;
+  background: #f1f5f9;
+  color: #334155;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-family: inherit;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+
+.btn-secondary:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn-secondary:hover:not(:disabled) { background: #e2e8f0; }
+
+.btn-link {
+  background: none;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-family: inherit;
+  padding: 0.25rem 0.5rem;
+}
+
+.btn-link:hover { color: #dc2626; }
+
+/* ─── PersonCreateModal ─────────────────────────────────────────────────────── */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-panel {
+  background: #fff;
+  border-radius: 10px;
+  width: 400px;
+  max-width: 95vw;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+  overflow: hidden;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h4 { margin: 0; font-size: 1rem; }
+
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 1.1rem;
+  cursor: pointer;
+  color: #64748b;
+  line-height: 1;
+}
+
+.modal-body {
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+/* ─── Searchable dropdowns (persons / right holders) ───────────────────────── */
+
+.person-search-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  margin: 2px 0 0;
+  padding: 4px 0;
+  list-style: none;
+  background: #fff;
+  border: 1px solid var(--border-color, #d9d9d9);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.person-search-item {
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.person-search-item:hover {
+  background: #eff6ff;
+}

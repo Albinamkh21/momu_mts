@@ -4,7 +4,7 @@ import { PersonsRenderer } from './renderers/PersonsRenderer';
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-alpine.css';
 
-export const TrackGrid = ({ fetchTracks, filters, onPersonClick, onTrackClick, searchTrigger }) => {
+export const TrackGrid = ({ fetchTracks, filters, onPersonClick, onTrackClick, onEditTrack, searchTrigger }) => {
   const gridApiRef = useRef(null);
   
   // Ref для хранения фильтров, которые будут отправлены на сервер при запросе
@@ -45,8 +45,27 @@ export const TrackGrid = ({ fetchTracks, filters, onPersonClick, onTrackClick, s
       field: 'labels', 
       headerName: 'Лейблы', 
       valueFormatter: p => p.value?.map(l => l.name).join(', ') 
+    },
+    {
+      headerName: '',
+      width: 110,
+      sortable: false,
+      filter: false,
+      cellRenderer: (params) => {
+        if (!params.data) return null;
+        return (
+          <button
+            type="button"
+            className="btn-sm"
+            onClick={() => onEditTrack && onEditTrack(params.data.id)}
+            title="Редактировать трек"
+          >
+            ✎ Редактировать
+          </button>
+        );
+      },
     }
-  ], [onPersonClick, onTrackClick]);
+  ], [onPersonClick, onTrackClick, onEditTrack]);
 
   // Функция настройки источника данных
   const setupDatasource = useCallback((gridApi) => {

@@ -343,10 +343,45 @@ from datetime import datetime
 from sqlalchemy import text
 
 
-def build_standard_query(fields: str, group_by: str, where_clause: str) -> str:
-    """Генератор для стандартных плоских запросов (default, 100plus100)"""
-    return f"""
-        SELECT {fields} 
+def build_standard_query(fields_base: str, group_by: str, extra_where: str = "",
+                          label_id: int = None, right_usage_type_id: int = None) -> tuple:
+    """Генератор для стандартных плоских запросов (separate_by_rights).
+    Работает с track_right, где каждый тип использования - отдельная строка, поэтому
+    колонки-пивот (CASE WHEN) и фильтр по right_usage_type_id формируются здесь же.
+    fields_base должен содержать плейсхолдер '{columns_sql}' на месте пивот-колонок.
+    """
+    types_to_process = [
+        (RightUsageType.INT, "INT"),
+        (RightUsageType.MOB, "MOB"),
+        (RightUsageType.PUB, "PUB"),
+    ]
+    if right_usage_type_id and right_usage_type_id != RightUsageType.ALL:
+        if right_usage_type_id == RightUsageType.INT:
+            types_to_process = [(RightUsageType.INT, "INT")]
+        elif right_usage_type_id == RightUsageType.MOB:
+            types_to_process = [(RightUsageType.MOB, "MOB")]
+        elif right_usage_type_id == RightUsageType.PUB:
+            types_to_process = [(RightUsageType.PUB, "PUB")]
+
+    case_sql = ", ".join([
+        f"MAX(CASE WHEN tr.right_usage_type_id = {rut_id} THEN tr.share_percentage ELSE 0 END) AS {label}"
+        for rut_id, label in types_to_process
+    ])
+
+    where_parts, params = [], {}
+    if label_id:
+        where_parts.append("m.label_id = :label_id")
+        params["label_id"] = label_id
+    if right_usage_type_id and right_usage_type_id != RightUsageType.ALL:
+        where_parts.append("(tr.right_usage_type_id = :rut_id and share_percentage > 0)")
+        params["rut_id"] = right_usage_type_id
+    if extra_where:
+        where_parts.append(extra_where)
+
+    where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+    query = f"""
+        SELECT {fields_base.replace('{columns_sql}', case_sql)}
         FROM 
         mv_track_extended m
         JOIN track_right tr ON tr.track_id = m.track_id
@@ -356,8 +391,9 @@ def build_standard_query(fields: str, group_by: str, where_clause: str) -> str:
         {group_by} 
         ORDER BY m.label_id, m.track_id;
     """
+    return query, params
 
-def build_unified_rights_query(where_clause: str, right_usage_type_id: int = None) -> str:
+def build_unified_rights_query_old(where_clause: str, right_usage_type_id: int = None) -> str:
     if right_usage_type_id and right_usage_type_id != RightUsageType.ALL:
         suffix = right_usage_type_id.name.lower()
         rel_sql = f"COALESCE(ra.rel_{suffix}, 0) AS related_{suffix}"
@@ -392,7 +428,60 @@ def build_unified_rights_query(where_clause: str, right_usage_type_id: int = Non
         {final_where}
         ORDER BY m.label_id, ra.base_code;
     """  
+def build_unified_rights_query(label_id: int = None, right_usage_type_id: int = None,
+                                is_100plus: bool = True, extra_where: str = "") -> tuple:
+    """Генератор для унифицированных запросов (default, 100plus100).
+    Работает с mv_track_rights, где каждый тип использования - уже отдельная КОЛОНКА
+    (rel_int/rel_mob/rel_pub, auth_int/auth_mob/auth_pub), а не строка, как в track_right.
+    Поэтому фильтр по right_usage_type_id здесь не нужен/невозможен - вместо этого
+    выбираются нужные колонки, а фильтрация 100+ идёт по их значениям.
+    """
+    if right_usage_type_id and right_usage_type_id != RightUsageType.ALL:
+        if right_usage_type_id == RightUsageType.INT:
+            suffix = "int"
+        elif right_usage_type_id == RightUsageType.MOB:
+            suffix = "mob"
+        elif right_usage_type_id == RightUsageType.PUB:
+            suffix = "pub"
 
+        rel_sql = f"COALESCE(tr.rel_{suffix}, 0) AS related_{suffix}"
+        auth_sql = f"COALESCE(tr.auth_{suffix}, 0) AS author_{suffix}"
+        # Фильтр применяется только если is_100plus=True
+        filter_sql = f"tr.rel_{suffix} >= 100 AND tr.auth_{suffix} >= 100" if is_100plus else ""
+    else:
+        rel_sql = "COALESCE(tr.rel_int, 0) AS rel_int, COALESCE(tr.rel_mob, 0) AS rel_mob, COALESCE(tr.rel_pub, 0) AS rel_pub"
+        auth_sql = "COALESCE(tr.auth_int, 0) AS auth_int, COALESCE(tr.auth_mob, 0) AS auth_mob, COALESCE(tr.auth_pub, 0) AS auth_pub"
+        # Фильтр применяется только если is_100plus=True
+        filter_sql = "(tr.rel_int + tr.rel_mob + tr.rel_pub) >= 300 AND (tr.auth_int + tr.auth_mob + tr.auth_pub) >= 300" if is_100plus else ""
+
+    where_parts, params = [], {}
+    if label_id:
+        where_parts.append("m.label_id = :label_id")
+        params["label_id"] = label_id
+    if filter_sql:
+        where_parts.append(filter_sql)
+    if extra_where:
+        where_parts.append(extra_where)
+
+    final_where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+    query = f"""
+        SELECT 
+            m.label_own_code,
+            m.upc, m.isrc, m.track_name, m.artist_name,
+            m.authors, m.composer, m.lyricist, m.album_name,
+            {rel_sql},
+            tr.rel_holders AS copyright_holder_related,
+            tr.base_code,
+            {auth_sql},
+            tr.auth_holders AS copyright_holder_author,
+            TO_CHAR(m.created_at::timestamp, 'DD-MM-YYYY') AS "Time period"
+        FROM mv_track_extended m
+        JOIN mv_track_rights tr ON tr.track_id = m.track_id
+        {final_where}
+        ORDER BY m.label_id, tr.base_code;
+    """
+    return query, params
 @celery_app.task(name="export_normalized_catalog_to_flat", bind=True)
 def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: int = None, right_usage_type_id: int = None, export_format: str = "default"):
     task_id = self.request.id
@@ -404,72 +493,29 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
     TaskProgress.emit(task_id, f"✅ Начало выгрузки ({export_format}).")
     print(f"✅ Начало выгрузки ({export_format}) - right_usage_type_id {right_usage_type_id}; label_id: {label_id}")
 
-    if right_usage_type_id and right_usage_type_id != RightUsageType.ALL:
-        if right_usage_type_id == RightUsageType.INT:
-            columns_sql = f"MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.INT} THEN tr.share_percentage ELSE 0 END) AS INT"
-        elif right_usage_type_id == RightUsageType.MOB:
-            columns_sql = f"MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.MOB} THEN tr.share_percentage ELSE 0 END) AS MOB"
-        elif right_usage_type_id == RightUsageType.PUB:
-            columns_sql = f"MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.PUB} THEN tr.share_percentage ELSE 0 END) AS PUB"
-    else:
-        columns_sql = f"""MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.INT} THEN tr.share_percentage ELSE 0 END) AS INT,
-            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.MOB} THEN tr.share_percentage ELSE 0 END) AS MOB,
-            MAX(CASE WHEN tr.right_usage_type_id = {RightUsageType.PUB} THEN tr.share_percentage ELSE 0 END) AS PUB"""
-
-   
-    # 1. Списки колонок для разных форматов и типов прав
-    fields_default = f""" m.track_id, m.label_own_code, m.upc, m.isrc, m.track_name, m.artist_name, m.composer, m.lyricist, m.authors,
-           {columns_sql},
-            l.name AS copyright_holder
-
-    """
-    
-
-    fields_related = f"""  m.label_own_code , m.upc, m.isrc, m.track_name, m.artist_name,  m.authors, m.composer, m.lyricist, m.album_name,
+    # Списки колонок для separate_by_rights. Плейсхолдер {columns_sql} заменяется на CASE WHEN
+    # пивот-колонки внутри build_standard_query (только там нужен пивот, т.к. только там строки track_right).
+    # Форматы default/100plus100 используют build_unified_rights_query, которая сама формирует
+    # свои колонки из mv_track_rights (там типы использования - уже колонки, а не строки).
+    fields_related = """  m.label_own_code , m.upc, m.isrc, m.track_name, m.artist_name,  m.authors, m.composer, m.lyricist, m.album_name,
            {columns_sql},
             l.name AS copyright_holder """
 
-    fields_author = f""" m.track_id, m.label_own_code, m.track_name, m.artist_name,  m.authors, m.composer, m.lyricist, 
+    fields_author = """ m.track_id, m.label_own_code, m.track_name, m.artist_name,  m.authors, m.composer, m.lyricist, 
            {columns_sql},
             l.name AS copyright_holder """
-                    
 
-    
-   
-    fields_100plus = f"{fields_related}, {fields_author}"
-
-
-    # Словарь фабрики: теперь вместо готовых запросов мы храним структуру полей
     fields_factory = {
-        "default": {"default": fields_default},
-        "100plus100": {"default": fields_100plus},
         "separate_by_rights": {
             "_author": fields_author,
             "_related": fields_related
         }
     }
-   
+
     group_clause = {
-        "default": " GROUP BY  m.track_id, m.label_own_code, m.upc, m.isrc, m.track_name, m.artist_name, m.composer, m.lyricist, m.authors, l.name, m.label_id ",
         "separate_by_rights": " GROUP BY  m.track_id, m.label_own_code, m.upc, m.isrc, m.track_name, m.artist_name,  m.authors, m.composer, m.lyricist, m.album_name, l.name, m.label_id ",
-        "100plus100": "SELECT * FROM mv_catalog_100plus"
     }
 
-  
-    
-   # 2. Фильтры (БАЗОВЫЕ)
-    where_parts_base, params_base = [], {}
-    if label_id:
-        where_parts_base.append("m.label_id = :label_id")
-        params_base["label_id"] = label_id
-    if right_usage_type_id and right_usage_type_id != RightUsageType.ALL:
-        where_parts_base.append(" (tr.right_usage_type_id = :rut_id and share_percentage > 0 )")
-        params_base["rut_id"] = right_usage_type_id
-     
-
-        
-
-    
     # Конфигурация проходов и суффиксов для полей
     if export_format == "separate_by_rights":
         passes = [
@@ -477,10 +523,7 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
             {"suffix": "_related", "field_key": "_related", "cat_id": RightCategory.RELATED, "msg": "смежные"}
         ]
     else:
-        passes = [{"suffix": "", "field_key": "default", "cat_id": None, "msg": ""}]
-
-    #where_clause = f"WHERE {' AND '.join(where_parts_base)}" if where_parts_base else ""
-    #query = f"{base_query} {where_clause} ORDER BY track_id;"
+        passes = [{"suffix": "", "field_key": "default", "cat_id": None, "msg": "все"}]
 
     storage_dir = output_path or "/app/storage"
     os.makedirs(storage_dir, exist_ok=True)
@@ -492,28 +535,40 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
     try:
         with engine.connect() as conn:
             for p in passes:
-                # Копируем базовые фильтры под текущий проход
-                where_parts = where_parts_base.copy()
-                params = params_base.copy()
-                
-                # Если это раздельный проход, добавляем фильтр по категории прав
+                # Дополнительный фильтр по категории прав (только для раздельного прохода separate_by_rights)
+                extra_where = ""
+                extra_params = {}
                 if p["cat_id"] is not None:
                     TaskProgress.emit(task_id, f"⏳ Запуск прохода: {p['msg']} права...")
-                    where_parts.append(" ( tr.right_category_id = :cat_id and share_percentage > 0)")
-                    params["cat_id"] = p["cat_id"]
+                    extra_where = "(tr.right_category_id = :cat_id and share_percentage > 0)"
+                    extra_params["cat_id"] = p["cat_id"]
 
+                # Формирование колонок и фильтров по label_id/right_usage_type_id инкапсулировано
+                # в build_standard_query/build_unified_rights_query - у них разные исходные таблицы
+                # (track_right - строки на тип использования, mv_track_rights - уже колонки).
+                if export_format == "default":
+                    # Для default используем единый запрос без фильтра 100%
+                    query, params = build_unified_rights_query(
+                        label_id=label_id, right_usage_type_id=right_usage_type_id,
+                        is_100plus=False, extra_where=extra_where
+                    )
 
-                # Динамически определяем список полей для текущего формата и прохода
-                format_fields = fields_factory.get(export_format, fields_factory["default"])
-                current_fields = format_fields.get(p["field_key"], format_fields.get("default"))
+                elif export_format == "100plus100":
+                    # Для 100plus100 используем тот же запрос, но с фильтром 100%
+                    query, params = build_unified_rights_query(
+                        label_id=label_id, right_usage_type_id=right_usage_type_id,
+                        is_100plus=True, extra_where=extra_where
+                    )
 
-              
+                elif export_format == "separate_by_rights":
+                    # Для раздельных файлов оставляем классический плоский запрос с группировкой
+                    current_fields = fields_factory["separate_by_rights"][p["field_key"]]
+                    query, params = build_standard_query(
+                        current_fields, group_clause["separate_by_rights"], extra_where=extra_where,
+                        label_id=label_id, right_usage_type_id=right_usage_type_id
+                    )
 
-                # Собираем финальный SQL
-                where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
-                query = build_standard_query(current_fields, group_clause.get(export_format, ""), where_clause) if export_format != "100plus100" else build_unified_rights_query(where_clause, right_usage_type_id)
-
-
+                params.update(extra_params)
 
                 base_filename = f"catalog_{export_format}_{p['suffix']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 

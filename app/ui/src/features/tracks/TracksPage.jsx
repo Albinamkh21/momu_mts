@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useTracks } from './hooks/useTracks';
 import { TrackGrid } from './components/TrackGrid';
 import { FiltersPanel } from './components/FiltersPanel';
+import { TrackWizardPage } from './editor/TrackWizardPage';
 import './tracks.css';
 
 const STORAGE_KEY = 'tracks_filters';
@@ -23,6 +24,8 @@ export const TracksPage = ({ onTrackClick }) => {
   const [selectedPerson, setSelectedPerson] = useState(null);
   const [filters, setFilters] = useState(getInitialFilters);
   const [searchTrigger, setSearchTrigger] = useState(0);
+  // null = closed, { trackId: null } = creating a new track, { trackId } = editing
+  const [editorState, setEditorState] = useState(null);
 
   const handleSearch = () => {
     if (!loading) {
@@ -37,6 +40,16 @@ export const TracksPage = ({ onTrackClick }) => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(newFilters));
   };
 
+  const openNewTrackEditor = () => setEditorState({ trackId: null });
+  const openEditTrackEditor = (trackId) => setEditorState({ trackId });
+  const closeEditor = () => setEditorState(null);
+
+  const handleEditorDone = () => {
+    closeEditor();
+    // Обновляем грид, чтобы отобразить созданный/изменённый трек
+    setSearchTrigger(prev => prev + 1);
+  };
+
   return (
     <div className="tracks-page">
       <FiltersPanel
@@ -45,7 +58,18 @@ export const TracksPage = ({ onTrackClick }) => {
         onSearch={handleSearch}
         loading={loading}
         labels={labels}
+        onAddTrack={openNewTrackEditor}
       />
+
+      {editorState && (
+        <div className="track-editor-inline">
+          <TrackWizardPage
+            trackId={editorState.trackId}
+            onDone={handleEditorDone}
+            onCancel={closeEditor}
+          />
+        </div>
+      )}
 
       <div className="grid-wrapper">
         {/* Анимация загрузки сохранена */}
@@ -63,6 +87,7 @@ export const TracksPage = ({ onTrackClick }) => {
           searchTrigger={searchTrigger}
           onPersonClick={setSelectedPerson} 
           onTrackClick={onTrackClick} 
+          onEditTrack={openEditTrackEditor}
         />
       </div>
 

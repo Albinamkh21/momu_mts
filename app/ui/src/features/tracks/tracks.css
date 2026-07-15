@@ -5,6 +5,15 @@
   flex-direction: column;
 }
 
+/* ── Inline track editor (embedded after FiltersPanel) ── */
+.track-editor-inline {
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
 /* ── Filters Panel ── */
 .filters-panel {
   background: #fff;
