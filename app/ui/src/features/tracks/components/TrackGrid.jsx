@@ -4,7 +4,7 @@ import { PersonsRenderer } from './renderers/PersonsRenderer';
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-alpine.css';
 
-export const TrackGrid = ({ fetchTracks, filters, onPersonClick, onTrackClick, onEditTrack, searchTrigger }) => {
+export const TrackGrid = ({ fetchTracks, filters, onPersonClick, onTrackClick, onEditTrack, onDeleteTrack, searchTrigger }) => {
   const gridApiRef = useRef(null);
   
   // Ref для хранения фильтров, которые будут отправлены на сервер при запросе
@@ -48,24 +48,39 @@ export const TrackGrid = ({ fetchTracks, filters, onPersonClick, onTrackClick, o
     },
     {
       headerName: '',
-      width: 110,
+      width: 200,
       sortable: false,
       filter: false,
       cellRenderer: (params) => {
         if (!params.data) return null;
         return (
-          <button
-            type="button"
-            className="btn-sm"
-            onClick={() => onEditTrack && onEditTrack(params.data.id)}
-            title="Редактировать трек"
-          >
-            ✎ Редактировать
-          </button>
+          <>
+            <button
+              type="button"
+              className="btn-sm"
+              onClick={() => onEditTrack && onEditTrack(params.data.id)}
+              title="Редактировать трек"
+            >
+              ✎ Редактировать
+            </button>
+            <button
+              type="button"
+              className="btn-sm btn-danger"
+              onClick={() => {
+                if (window.confirm(`Удалить трек "${params.data.title}"? Также будут удалены его права, участники и связи с релизом/лейблом (авторы и правообладатели удаляются, только если не используются другими треками).`)) {
+                  onDeleteTrack && onDeleteTrack(params.data.id);
+                }
+              }}
+              title="Удалить трек"
+              style={{ marginLeft: '0.25rem' }}
+            >
+              🗑
+            </button>
+          </>
         );
       },
     }
-  ], [onPersonClick, onTrackClick, onEditTrack]);
+  ], [onPersonClick, onTrackClick, onEditTrack, onDeleteTrack]);
 
   // Функция настройки источника данных
   const setupDatasource = useCallback((gridApi) => {

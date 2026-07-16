@@ -7,9 +7,22 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from models import Track, TrackLabel, TrackContribution, TrackRight, Release
+from models import (
+    Track,
+    TrackLabel,
+    TrackContribution,
+    TrackRight,
+    Release,
+    Person,
+    RightHolder,
+    Contract,
+    ReportTrackRightsCache,
+)
 from tasks.report_tasks import _normalize_title
 
+class TrackHasReportsError(Exception):
+    """Исключение, выбрасываемое при попытке удалить трек, у которого есть отчеты."""
+    pass
 
 class TrackRepository:
     def __init__(self, db: Session):
@@ -162,4 +175,87 @@ class TrackRepository:
 
     def clear_rights(self, track_id: int) -> None:
         self.db.query(TrackRight).filter(TrackRight.track_id == track_id).delete()
+        self.db.flush()
+
+    # ── Deletion ─────────────────────────────────────────────────────────────
+
+    def get_contribution_person_ids(self, track_id: int) -> list[int]:
+        """Distinct person_ids linked to this track via track_contribution."""
+        rows = (
+            self.db.query(TrackContribution.person_id)
+            .filter(
+                TrackContribution.track_id == track_id,
+                TrackContribution.person_id.isnot(None),
+            )
+            .distinct()
+            .all()
+        )
+        return [r[0] for r in rows]
+
+    def get_right_holder_ids(self, track_id: int) -> list[int]:
+        """Distinct right_holder_ids linked to this track via track_right."""
+        rows = (
+            self.db.query(TrackRight.right_holder_id)
+            .filter(
+                TrackRight.track_id == track_id,
+                TrackRight.right_holder_id.isnot(None),
+            )
+            .distinct()
+            .all()
+        )
+        return [r[0] for r in rows]
+
+    def delete_track(self, track: Track) -> None:
+        # 1. Явно проверяем, есть ли записи в кэше отчетов для этого трека
+        has_reports = self.db.query(ReportTrackRightsCache).filter(
+            ReportTrackRightsCache.track_id == track.id
+        ).first() is not None
+
+        # 2. Если отчеты найдены — возбуждаем нашу ошибку и прекращаем работу
+        if has_reports:
+            raise TrackHasReportsError()
+
+        # 3. Если отчетов нет — удаляем трек.
+        # Благодаря passive_deletes=True в моделях, база сама каскадно удалит track_right и т.д.
+        self.db.delete(track)
+        self.db.flush()
+
+    def person_referenced_elsewhere(self, person_id: int) -> bool:
+        """True if any track_contribution row still references this person."""
+        return (
+            self.db.query(TrackContribution)
+            .filter(TrackContribution.person_id == person_id)
+            .first()
+            is not None
+        )
+
+    def delete_person(self, person_id: int) -> None:
+        self.db.query(Person).filter(Person.id == person_id).delete()
+        self.db.flush()
+
+    def right_holder_referenced_elsewhere(self, right_holder_id: int) -> bool:
+        """True if any track_right, contract or report_track_rights_cache row
+        still references this right holder."""
+        if (
+            self.db.query(TrackRight)
+            .filter(TrackRight.right_holder_id == right_holder_id)
+            .first()
+        ):
+            return True
+        if (
+            self.db.query(Contract)
+            .filter(Contract.right_holder_id == right_holder_id)
+            .first()
+        ):
+            return True
+        if (
+            self.db.query(ReportTrackRightsCache)
+            .filter(ReportTrackRightsCache.right_holder_id == right_holder_id)
+            .first()
+        ):
+            return True
+        return False
+
+    def delete_right_holder(self, right_holder_id: int) -> None:
+        self.db.query(RightHolder).filter(RightHolder.id == right_holder_id).delete()
         self.db.flush()

@@ -3,6 +3,7 @@ import { useTracks } from './hooks/useTracks';
 import { TrackGrid } from './components/TrackGrid';
 import { FiltersPanel } from './components/FiltersPanel';
 import { TrackWizardPage } from './editor/TrackWizardPage';
+import { deleteTrack } from './api/tracks.api';
 import './tracks.css';
 
 const STORAGE_KEY = 'tracks_filters';
@@ -26,6 +27,7 @@ export const TracksPage = ({ onTrackClick }) => {
   const [searchTrigger, setSearchTrigger] = useState(0);
   // null = closed, { trackId: null } = creating a new track, { trackId } = editing
   const [editorState, setEditorState] = useState(null);
+  const [deleteError, setDeleteError] = useState('');
 
   const handleSearch = () => {
     if (!loading) {
@@ -48,6 +50,16 @@ export const TracksPage = ({ onTrackClick }) => {
     closeEditor();
     // Обновляем грид, чтобы отобразить созданный/изменённый трек
     setSearchTrigger(prev => prev + 1);
+  };
+
+  const handleDeleteTrack = async (trackId) => {
+    setDeleteError('');
+    try {
+      await deleteTrack(trackId);
+      setSearchTrigger((prev) => prev + 1);
+    } catch (err) {
+      setDeleteError(err.response?.data?.detail || 'Не удалось удалить трек.');
+    }
   };
 
   return (
@@ -79,6 +91,10 @@ export const TracksPage = ({ onTrackClick }) => {
             <span className="loading-text">Загружаем треки...</span>
           </div>
         )}
+
+        {deleteError && (
+          <div className="wizard-error">{deleteError}</div>
+        )}
         
         {/* Грид теперь работает в режиме Infinite */}
         <TrackGrid 
@@ -88,6 +104,7 @@ export const TracksPage = ({ onTrackClick }) => {
           onPersonClick={setSelectedPerson} 
           onTrackClick={onTrackClick} 
           onEditTrack={openEditTrackEditor}
+          onDeleteTrack={handleDeleteTrack}
         />
       </div>
 

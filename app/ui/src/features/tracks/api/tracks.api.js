@@ -11,6 +11,11 @@ export const getTrackDetail = async (id) => {
   return data;
 };
 
+export const deleteTrack = async (id) => {
+  const { data } = await httpClient.delete(`/tracks/${id}`);
+  return data;
+};
+
 export const getLabels = async () => {
   const { data } = await httpClient.get('/labels');
   return data;

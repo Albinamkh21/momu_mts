@@ -414,11 +414,11 @@ class Track(Base):
     title_tokens: Mapped[Optional[list[str]]] = mapped_column(ARRAY(Text()))
     title_norm_key: Mapped[Optional[str]] = mapped_column(Text)
 
-    release: Mapped[list['Release']] = relationship('Release', secondary='track_release', back_populates='track')
-    track_contribution: Mapped[list['TrackContribution']] = relationship('TrackContribution', back_populates='track')
-    track_label: Mapped[list['TrackLabel']] = relationship('TrackLabel', back_populates='track')
+    release: Mapped[list['Release']] = relationship('Release', secondary='track_release', back_populates='track',passive_deletes=True)
+    track_contribution: Mapped[list['TrackContribution']] = relationship('TrackContribution', back_populates='track',passive_deletes=True)
+    track_label: Mapped[list['TrackLabel']] = relationship('TrackLabel', back_populates='track',passive_deletes=True)
     report_track_rights_cache: Mapped[list['ReportTrackRightsCache']] = relationship('ReportTrackRightsCache', back_populates='track')
-    track_right: Mapped[list['TrackRight']] = relationship('TrackRight', back_populates='track')
+    track_right: Mapped[list['TrackRight']] = relationship('TrackRight', back_populates='track', passive_deletes=True )
 
 
 t_track_full_info = Table(

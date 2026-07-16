@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Depends, Query, Path, HTTPException, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from typing import Optional
 from pydantic import BaseModel
 import logging
 
 from core.database import SessionLocal
 from tasks.report_tasks import _normalize_name
+from __crud.track_repository import TrackRepository, TrackHasReportsError
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -308,6 +310,55 @@ def get_track_detail(track_id: int = Path(...), db: Session = Depends(get_db)):
         "labels": labels,
         "persons": persons,
         "rights": rights_result,
+    }
+
+
+@router.delete("/tracks/{track_id}")
+def delete_track(track_id: int = Path(...), db: Session = Depends(get_db)):
+    repo = TrackRepository(db)
+    track = repo.get_track(track_id)
+    if track is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    person_ids = repo.get_contribution_person_ids(track_id)
+    right_holder_ids = repo.get_right_holder_ids(track_id)
+
+    try:
+        repo.delete_track(track)
+    except TrackHasReportsError:
+        db.rollback()
+        # Это контролируемый нами случай: у старого трека есть отчеты
+        raise HTTPException(
+            status_code=409,
+            detail="Невозможно удалить трек: на него есть ссылки в отчётах.",
+        )
+    except IntegrityError as e:
+        db.rollback()
+        # Это непредвиденная ошибка БД (например, забыли какую-то связь каскадировать)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Системная ошибка при удалении трека: {str(e)}",
+        )
+
+    removed_persons = []
+    for person_id in person_ids:
+        if not repo.person_referenced_elsewhere(person_id):
+            repo.delete_person(person_id)
+            removed_persons.append(person_id)
+
+    removed_right_holders = []
+    for right_holder_id in right_holder_ids:
+        if not repo.right_holder_referenced_elsewhere(right_holder_id):
+            repo.delete_right_holder(right_holder_id)
+            removed_right_holders.append(right_holder_id)
+
+    db.commit()
+
+    return {
+        "id": track_id,
+        "deleted": True,
+        "removed_person_ids": removed_persons,
+        "removed_right_holder_ids": removed_right_holders,
     }
 
 

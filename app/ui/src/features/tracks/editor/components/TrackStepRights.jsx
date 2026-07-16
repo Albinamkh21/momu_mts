@@ -4,6 +4,7 @@ import {
   getRightCategoriesRef,
   getRightUsageTypesRef,
 } from '../api/drafts.api';
+import { RightHolderCreateModal } from './modals/RightHolderCreateModal';
 
 const emptyRight = () => ({
   _key: Math.random().toString(36).slice(2),
@@ -92,6 +93,8 @@ export function TrackStepRights({ data, onChange }) {
   const [holders, setHolders] = useState([]);
   const [categories, setCategories] = useState([]);
   const [usageTypes, setUsageTypes] = useState([]);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingIdx, setEditingIdx] = useState(null);
 
   useEffect(() => {
     getRightHoldersRef().then(setHolders).catch(() => setHolders([]));
@@ -100,6 +103,20 @@ export function TrackStepRights({ data, onChange }) {
   }, []);
 
   const update = (list) => onChange({ rights: list });
+
+  const openCreateModal = (idx) => {
+    setEditingIdx(idx);
+    setModalOpen(true);
+  };
+
+  const handleRightHolderCreated = (holder) => {
+    setHolders((prev) => [...prev, holder]);
+    if (editingIdx !== null) {
+      setField(editingIdx, 'right_holder_id', holder.id);
+    }
+    setModalOpen(false);
+    setEditingIdx(null);
+  };
 
   const addRow = () => update([...rights, emptyRight()]);
 
@@ -163,14 +180,26 @@ export function TrackStepRights({ data, onChange }) {
             return (
               <tr key={r._key || idx}>
                 <td>
-                  <SearchableSelect
-                    options={holders}
-                    value={r.right_holder_id}
-                    onChange={(id) =>
-                      setField(idx, 'right_holder_id', id !== '' ? Number(id) : '')
-                    }
-                    placeholder="Поиск правообладателя..."
-                  />
+                  <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'flex-start' }}>
+                    <div style={{ flex: 1 }}>
+                      <SearchableSelect
+                        options={holders}
+                        value={r.right_holder_id}
+                        onChange={(id) =>
+                          setField(idx, 'right_holder_id', id !== '' ? Number(id) : '')
+                        }
+                        placeholder="Поиск правообладателя..."
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-sm"
+                      onClick={() => openCreateModal(idx)}
+                      title="Создать нового правообладателя"
+                    >
+                      + Новый
+                    </button>
+                  </div>
                 </td>
                 <td>
                   <select
@@ -260,6 +289,13 @@ export function TrackStepRights({ data, onChange }) {
             );
           })}
         </div>
+      )}
+
+      {modalOpen && (
+        <RightHolderCreateModal
+          onCreated={handleRightHolderCreated}
+          onClose={() => { setModalOpen(false); setEditingIdx(null); }}
+        />
       )}
     </div>
   );
