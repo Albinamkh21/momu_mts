@@ -1,2 +1,1 @@
-from .catalog_tasks import process_catalog_file
 from .report_tasks import process_report_file, group_report_data
