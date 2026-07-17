@@ -39,16 +39,15 @@ def get_tracks(
     label_own_code: Optional[str] = Query(None),
     label_id: Optional[int] = Query(None),
     query: Optional[str] = Query(None, description="Общий поиск"),
-   
     artist_name: Optional[str] = Query(None, description="Поиск по исполнителю"),
-    author_name: Optional[str] = Query(None, description="Поиск по авторам "),
-
+    author_name: Optional[str] = Query(None, description="Поиск по авторам"),
     limit: int = Query(100, le=500),
     offset: int = Query(0, ge=0, description="Сколько записей пропустить"),
     db: Session = Depends(get_db),
     response: Response = None,
 ):
-   
+    # JOINs for person/label filters (replaces EXISTS — uses trigram + composite indexes)
+    joins = []
     conditions = []
     params = {"lim": limit, "off": offset}
 
@@ -63,49 +62,54 @@ def get_tracks(
         params["isrc"] = isrc
     if label_own_code:
         conditions.append("t.label_own_code = :loc")
-        params["loc"] = f"{label_own_code}"
+        params["loc"] = label_own_code
     if label_id:
-        conditions.append("""
-            EXISTS (
-                SELECT 1 FROM track_label tl 
-                WHERE tl.track_id = t.id AND tl.label_id = :label_id
-            )
+        # Simple semi-join via subquery; uses index on track_label(label_id)
+        joins.append("""
+            JOIN (
+                SELECT track_id FROM track_label WHERE label_id = :label_id
+            ) lf ON lf.track_id = t.id
         """)
         params["label_id"] = label_id
 
-    # Для artist_name:
     if artist_name:
-        conditions.append("""
-            EXISTS (
-                SELECT 1 FROM track_contribution tc
-                JOIN person p ON p.id = tc.person_id
-                WHERE tc.track_id = t.id 
-                AND tc.role IN ('artist', 'artist_name', 'track_artist_name') -- Расширяем список
-                AND p.full_name ILIKE :artist_name
-            )
+        # Start from person (trigram index on full_name), then look up
+        # track_contribution(person_id, role) — avoids full scan of track_contribution
+        joins.append("""
+            JOIN (
+                SELECT DISTINCT tc.track_id
+                FROM person p
+                JOIN track_contribution tc
+                    ON tc.person_id = p.id
+                    AND tc.role IN ('artist', 'artist_name', 'track_artist_name')
+                WHERE p.full_name ILIKE :artist_name
+            ) af ON af.track_id = t.id
         """)
         params["artist_name"] = f"%{artist_name}%"
 
-    # Для author_name:
     if author_name:
-        conditions.append("""
-            EXISTS (
-                SELECT 1 FROM track_contribution tc
-                JOIN person p ON p.id = tc.person_id
-                WHERE tc.track_id = t.id 
-                AND tc.role IN ('composer', 'lyricist', 'author', 'authors') -- Добавляем 'authors'
-                AND p.full_name ILIKE :author_name
-            )
+        # Same pattern: trigram scan on person → composite index on track_contribution
+        joins.append("""
+            JOIN (
+                SELECT DISTINCT tc.track_id
+                FROM person p
+                JOIN track_contribution tc
+                    ON tc.person_id = p.id
+                    AND tc.role IN ('composer', 'lyricist', 'author', 'authors')
+                WHERE p.full_name ILIKE :author_name
+            ) auf ON auf.track_id = t.id
         """)
-        params["author_name"] = f"%{author_name}%"    
+        params["author_name"] = f"%{author_name}%"
 
+    join_clause = "\n".join(joins)
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
-    # Общее количество записей по условиям (до LIMIT/OFFSET)
+    # Total count before pagination
     total_row = db.execute(
         text(f"""
             SELECT COUNT(*) AS cnt
             FROM track t
+            {join_clause}
             {where}
         """),
         params,
@@ -119,6 +123,7 @@ def get_tracks(
         text(f"""
             SELECT t.id, t.isrc, t.label_own_code, t.title
             FROM track t
+            {join_clause}
             {where}
             ORDER BY t.id
             LIMIT :lim OFFSET :off
