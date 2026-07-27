@@ -5,17 +5,31 @@ import time
 import polars as pl
 from polars import lit
 from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
 from core.celery_app import celery_app
 from .utils import clean_null_bytes
 from celery import current_task
 from services.broadcaster import TaskProgress
 import uuid
-from datetime import datetime
+import sys
 
+def get_database_url():
+    # Проверяем не только env-переменные, но и запущен ли сейчас pytest в принципе.
+    # Если запущен pytest, но DATABASE_URL_TEST почему-то пустой, 
+    # мы можем программно подставить тестовую базу или принудительно ругаться.
+    is_testing = "pytest" in sys.modules or os.getenv("TESTING") == "true"
+    
+    if is_testing:
+        test_url = os.getenv("DATABASE_URL_TEST")
+        if test_url:
+            return test_url
+        # Если тест идет, а тестовой переменной нет — подставляем тестовую базу явно по шаблону
+        return os.getenv("DATABASE_URL", "").replace("/momu", "/momu_test")
+        
+    return os.getenv("DATABASE_URL")
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = get_database_url()
 engine = create_engine(DATABASE_URL)
-
 
 # ===========================================================================
 #  TASK 1: Загрузка файла в staging_catalog_v2
@@ -153,19 +167,19 @@ def _sync_persons_v2(conn, upload_id, staging_table="staging_catalog_v2"):
     result_persons = conn.execute(
         text(f"""
         WITH person_names AS (
-            SELECT id AS staging_id, TRIM(unnest(clean_and_split_person_names(artist_name))) AS name, 'artist_name' AS role 
+            SELECT id AS staging_id, TRIM(unnest(public.clean_and_split_person_names(artist_name))) AS name, 'artist_name' AS role 
             FROM {staging_table} WHERE artist_name IS NOT NULL AND artist_name != '' AND upload_id = :upload_id
             UNION ALL
-            SELECT id AS staging_id, TRIM(unnest(clean_and_split_person_names(track_artist_name))) AS name, 'track_artist_name' AS role 
+            SELECT id AS staging_id, TRIM(unnest(public.clean_and_split_person_names(track_artist_name))) AS name, 'track_artist_name' AS role 
             FROM {staging_table} WHERE track_artist_name IS NOT NULL AND track_artist_name != '' AND upload_id = :upload_id
             UNION ALL
-            SELECT id AS staging_id, TRIM(unnest(clean_and_split_person_names(composer))) AS name, 'composer' AS role 
+            SELECT id AS staging_id, TRIM(unnest(public.clean_and_split_person_names(composer))) AS name, 'composer' AS role 
             FROM {staging_table} WHERE composer IS NOT NULL AND composer != '' AND upload_id = :upload_id
             UNION ALL
-            SELECT id AS staging_id, TRIM(unnest(clean_and_split_person_names(lyricist))) AS name, 'lyricist' AS role 
+            SELECT id AS staging_id, TRIM(unnest(public.clean_and_split_person_names(lyricist))) AS name, 'lyricist' AS role 
             FROM {staging_table} WHERE lyricist IS NOT NULL AND lyricist != '' AND upload_id = :upload_id
             UNION ALL
-            SELECT id AS staging_id, TRIM(unnest(clean_and_split_person_names(authors))) AS name, 'authors' AS role 
+            SELECT id AS staging_id, TRIM(unnest(public.clean_and_split_person_names(authors))) AS name, 'authors' AS role 
             FROM {staging_table} WHERE authors IS NOT NULL AND authors != '' AND upload_id = :upload_id
         )
         INSERT INTO staging_person (staging_id, full_name, upload_id, role)

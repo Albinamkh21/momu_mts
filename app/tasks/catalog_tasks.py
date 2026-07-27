@@ -15,10 +15,26 @@ from services.broadcaster import TaskProgress
 from services.csv_writer import BaseCSVWriter, TomeExcelWriter, TomeWriterFactory
 import xlsxwriter
 import csv
+import sys
 
 
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+def get_database_url():
+    # Проверяем не только env-переменные, но и запущен ли сейчас pytest в принципе.
+    # Если запущен pytest, но DATABASE_URL_TEST почему-то пустой, 
+    # мы можем программно подставить тестовую базу или принудительно ругаться.
+    is_testing = "pytest" in sys.modules or os.getenv("TESTING") == "true"
+    
+    if is_testing:
+        test_url = os.getenv("DATABASE_URL_TEST")
+        if test_url:
+            return test_url
+        # Если тест идет, а тестовой переменной нет — подставляем тестовую базу явно по шаблону
+        return os.getenv("DATABASE_URL", "").replace("/momu", "/momu_test")
+        
+    return os.getenv("DATABASE_URL")
+
+DATABASE_URL = get_database_url()
 engine = create_engine(DATABASE_URL)
 
 
@@ -168,6 +184,17 @@ def build_unified_rights_query(label_id: int = None, right_usage_type_id: int = 
 @celery_app.task(name="export_normalized_catalog_to_flat", bind=True)
 def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: int = None, right_usage_type_id: int = None, export_format: str = "default"):
     task_id = self.request.id
+
+    import sys
+    import os
+    
+    print("\n" + "🔥" * 30)
+    print(f"🔥 [DEBUG TASK START] Задача: {self.request.id}")
+    print(f"🔥 [DEBUG] Текущие модули (есть ли pytest): {'pytest' in sys.modules}")
+    print(f"🔥 [DEBUG] DATABASE_URL_TEST env: {os.getenv('DATABASE_URL_TEST')}")
+    print(f"🔥 [DEBUG] DATABASE_URL env: {os.getenv('DATABASE_URL')}")
+    print(f"🔥 [DEBUG] Результат get_database_url(): {get_database_url()}")
+    print("🔥" * 30 + "\n")
 
     if not export_format:
         export_format = "default"

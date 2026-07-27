@@ -2,21 +2,28 @@
 
 Revision ID: 9b7524fc29e5
 Revises: b378978c23eb
-Create Date: 2026-07-09 ...
+Create Date: 2026-07-09
 """
-from alembic import op
+from alembic import context, op
 import sqlalchemy as sa
 
 
 revision = '9b7524fc29e5'
-down_revision = 'b378978c23eb'
+down_revision = 'd2b3c4e5f6a7'  
 branch_labels = None
 depends_on = None
 
 
 def upgrade() -> None:
-    # Увеличиваем выделение памяти для текущей сессии миграции (для быстрой сборки индексов и вьюшек)
-    op.execute("SET work_mem = '256MB';")
+    tags = context.get_x_argument(as_dictionary=True)
+    if tags.get("run_optional") != "true":
+        print(
+            f"⏩ Миграция {revision} пропущена по умолчанию (требуется флаг -x run_optional=true)"
+        )
+        return
+
+    # Изменяем work_mem локально для сессии
+    op.execute("SET LOCAL work_mem = '256MB';")
 
     # 1. Индекс на существующую таблицу track_right
     op.execute("""
@@ -24,7 +31,7 @@ def upgrade() -> None:
         ON track_right (right_usage_type_id, track_id, right_category_id, share_percentage);
     """)
 
-    # 2. Материализованное представление mv_track_extended с проверкой на существование
+    # 2. Materialized View: mv_track_extended
     op.execute("""
         DO $$
         BEGIN
@@ -76,11 +83,10 @@ def upgrade() -> None:
         END $$;
     """)
 
-    # Индексы для mv_track_extended
     op.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx__mv_track_extended__track_id ON mv_track_extended(track_id);")
     op.execute("CREATE INDEX IF NOT EXISTS idx_mv_track_extended_sort ON mv_track_extended(label_id, track_id);")
 
-    # 4. Материализованное представление mv_track_rights_prev с проверкой
+    # 3. Materialized View: mv_track_rights_prev
     op.execute("""
         DO $$
         BEGIN
@@ -111,10 +117,9 @@ def upgrade() -> None:
         END $$;
     """)
 
-    # Индекс для mv_track_rights_prev
     op.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_track_rights_prev__track_id ON mv_track_rights_prev(track_id);")
 
-    # 5. Материализованное представление mv_track_rights с проверкой
+    # 4. Materialized View: mv_track_rights
     op.execute("""
         DO $$
         BEGIN
@@ -166,20 +171,22 @@ def upgrade() -> None:
         END $$;
     """)
 
-    # Индексы для главного mv_track_rights
     op.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_track_rights__track_id ON mv_track_rights(track_id);")
     op.execute("CREATE INDEX IF NOT EXISTS idx_mv_track_rights_sort ON mv_track_rights(base_code);")
 
 
 def downgrade() -> None:
-    # Удаление объектов в строго обратном порядке зависимостей с проверкой на существование (условие 2)
-    
-    # 1. Сначала удаляем зависимые материализованные представления
+    tags = context.get_x_argument(as_dictionary=True)
+    if tags.get("run_optional") != "true":
+        print(
+            f"⏩ Откат миграции {revision} пропущен (требуется флаг -x run_optional=true)"
+        )
+        return
+
+    # Удаляем views в обратном порядке (с CASCADE на случай зависимых объектов)
     op.execute("DROP MATERIALIZED VIEW IF EXISTS mv_track_rights CASCADE;")
     op.execute("DROP MATERIALIZED VIEW IF EXISTS mv_track_rights_prev CASCADE;")
     op.execute("DROP MATERIALIZED VIEW IF EXISTS mv_track_extended CASCADE;")
 
-
-
-    # 3. Удаляем добавленный индекс с таблицы track_right
+    # Удаляем индекс с базовой таблицы
     op.execute("DROP INDEX IF EXISTS idx_track_right_perf;")

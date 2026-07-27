@@ -68,6 +68,31 @@ def upgrade() -> None:
     END;
     $$ LANGUAGE plpgsql;
     """)
+
+    op.execute("""
+        CREATE OR REPLACE FUNCTION public.clean_and_split_person_names(text_field text) RETURNS text[]
+            LANGUAGE plpgsql
+            AS $$
+        BEGIN
+            -- NULL или пустая строка → пустой массив
+            IF text_field IS NULL OR trim(text_field) = '' THEN
+                RETURN ARRAY[]::text[];
+            END IF;
+
+            RETURN (
+                SELECT array_agg(trim(elem))
+                FROM (
+                    SELECT unnest(regexp_split_to_array(
+                        text_field,
+                        -- разделители: ; | , : / (только если / окружён пробелами)
+                        '\\s*[;|,:]\\s*|\\s+/\\s+'
+                    )) AS elem
+                ) sub
+                WHERE trim(elem) != ''
+            );
+        END;
+        $$;
+    """)
     # ### end Alembic commands ###
 
 

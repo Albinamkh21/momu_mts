@@ -216,7 +216,7 @@ INSERT INTO right_usage_type (code, name) VALUES
 ('MOB', 'Mobile'),
 ('INT', 'Internet');
 
-INSERT INTO right_category (name) values ('Author'), ('Related');
+INSERT INTO right_category (name) values ('Author'), ('Related'), ('Author&Related');
 
 
     CREATE TABLE staging_report (

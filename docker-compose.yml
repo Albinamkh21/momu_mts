@@ -47,6 +47,7 @@ services:
     command: uvicorn main:app --host 0.0.0.0 --port ${APP_PORT} --reload
     volumes:
       - ./app:/app
+      - ./.env.test:/app/.env.test
     environment:
       PYTHONPATH: /app
       CELERY_BROKER_URL: ${CELERY_BROKER_URL}
