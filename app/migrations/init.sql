@@ -710,3 +710,17 @@ CREATE INDEX idx_mv_unified_base ON mv_unified_track_rights(base_code);
 SELECT schemaname, matviewname 
 FROM pg_matviews 
 WHERE schemaname = 'public';
+
+
+ - 
+
+docker exec momu_app alembic current
+docker exec momu_app alembic upgrade d2b3c4e5f6a7
+# 1. Первая миграция
+docker exec momu_app alembic upgrade b378978c23eb
+
+# 2. Вторая миграция
+docker exec momu_app alembic upgrade c1a2b3d4e5f6
+
+# 3. Третья миграция
+docker exec momu_app alembic upgrade d2b3c4e5f6a7
