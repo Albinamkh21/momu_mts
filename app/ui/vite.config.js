@@ -6,7 +6,7 @@ export default defineConfig({
   server: {
     host: true,
     port: 5173,
-    allowedHosts: ['momu_ui'],
+    allowedHosts: true,
     proxy: {
       '/api': {
         target: 'http://app:8000',
