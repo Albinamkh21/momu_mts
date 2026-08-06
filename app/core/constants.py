@@ -28,5 +28,8 @@ class FindingSource:
     NAME_ARTIST_NORM_PARTLY = 8
     NAME_AUTHOR_NORM_PARTLY = 9
     ISRC__LABEL_CODE = 10 
+
+class NUMBERS:
+    MOMU_BASE_RIGHTS_HOLDER_PERCENT = 70
    
   

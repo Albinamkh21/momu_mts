@@ -3,7 +3,7 @@ import polars as pl
 from sqlalchemy import create_engine, text
 from core.celery_app import celery_app
 from celery import current_task
-from core.constants import RightCategory, FindingSource, RightUsageType
+from core.constants import RightCategory, FindingSource, RightUsageType, NUMBERS
 from .utils import clean_null_bytes
 from services.broadcaster import TaskProgress
 import uuid
@@ -12,6 +12,8 @@ from datetime import datetime
 from typing import Optional, List
 import re
 import xlsxwriter
+import calendar
+
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
@@ -2098,7 +2100,111 @@ def calculate_and_save_tracks_rights(connection,
 
 
 
+from pathlib import Path
+def _write_momu_summary_sheet(wb, df_service, df_track, label_name, licensor_name, period_str, total_income):
+    ws = wb.add_worksheet("Сводный отчет")
 
+    # --- СТИЛИ ДЛЯ ВЕДОМОСТИ ---
+    title_fmt = wb.add_format({'bold': True, 'font_size': 14})
+    subtitle_fmt = wb.add_format({'bold': True, 'font_size': 12})
+    table_head_fmt = wb.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter', 'text_wrap': True})
+    table_cell_fmt = wb.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter'})
+    table_num_fmt = wb.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter', 'num_format': '#,##0.00'})
+    sign_gray_fmt = wb.add_format({'font_color': 'gray', 'italic': True, 'font_size': 10})
+
+    # --- ПАРСИНГ ИМЕНИ ЛИЦЕНЗИАРА ---
+    parts = licensor_name.split(" ", 1)
+    contract_code = parts[0] if len(parts) > 0 else ""
+    licensor_name = parts[1] if len(parts) > 1 else licensor_name
+
+    num_match = re.search(r'\d+', contract_code)
+    contract_n = int(num_match.group()) if num_match else 1
+
+    #base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    #logo_path = os.path.join(base_dir, "media", "logo.jpeg")
+    logo_path = Path(__file__).resolve().parents[1] / "media" / "logo.jpeg"
+    
+    if os.path.exists(logo_path):
+        # Вставляем картинку в ячейку G1 (строка 0, колонка 6). 
+        # Параметры x_scale/y_scale можно поменять, если картинка будет слишком большой или маленькой.
+        ws.insert_image(0, 9, str(logo_path), {'x_scale': 0.1, 'y_scale': 0.1})
+
+
+    ws.write(0, 0, "Отчетная ведомость", title_fmt)
+    ws.write(2, 0, f"{label_name} - {licensor_name} - {period_str}", subtitle_fmt)
+    ws.write(4, 0, "Сводный отчет", subtitle_fmt)
+    ws.write(4, 6, str(logo_path), subtitle_fmt)
+
+
+    # Таблица ведомости
+    headers = ["N", "Договор", "Сумма Дохода, KZT", "Роялти Лицензиара, %", "Сумма Дохода Лицензиара, KZT"]
+    for col, h in enumerate(headers):
+        ws.write(6, col, h, table_head_fmt)
+    
+    ws.set_row(6, 40) # Делаем шапку таблицы чуть выше
+
+    royalty_percent = NUMBERS.MOMU_BASE_RIGHTS_HOLDER_PERCENT
+  
+    ws.write(7, 0, contract_n, table_cell_fmt)
+    ws.write(7, 1, contract_code, table_cell_fmt) 
+    ws.write(7, 2, total_income, table_num_fmt) 
+    ws.write(7, 3, royalty_percent, table_cell_fmt) 
+    ws.write(7, 4, total_income * royalty_percent / 100, table_num_fmt)
+
+    ws.write(8, 3, "Итого:", wb.add_format({'bold': True, 'align': 'right'}))
+    ws.write(8, 4, total_income * royalty_percent / 100, wb.add_format({'bold': True, 'align': 'center', 'num_format': '#,##0.00'}))
+
+   
+
+    start_row = 11 
+    signature_row = start_row 
+
+    # Лицензиар (Слева)
+    ws.write(signature_row, 0, "Лицензиар")
+    ws.write(signature_row + 1, 0, licensor_name, wb.add_format({'bold': True}))
+    ws.write(signature_row + 3, 0, "_________________________")
+    ws.write(signature_row + 4, 0, "(подпись, печать)", sign_gray_fmt)
+
+    # Лицензиат (Справа - под колонкой 3/D)
+    ws.write(signature_row, 3, "Лицензиат")
+    ws.write(signature_row + 1, 3, label_name, wb.add_format({'bold': True}))
+    ws.write(signature_row + 3, 3, "_________________________")
+    ws.write(signature_row + 4, 3, "(подпись, печать)", sign_gray_fmt)
+
+
+    # --- 3. ДВЕ ТАБЛИЦЫ СО СДВИГОМ ВНИЗ (ТЕПЕРЬ СНИЗУ) ---
+    start_row = signature_row + 7
+
+
+    header_yellow_left = wb.add_format({'bold': True, 'bg_color': '#FFFF00', 'border': 1, 'align': 'left', 'valign': 'vcenter', 'font_size': 11})
+    header_yellow_right = wb.add_format({'bold': True, 'bg_color': '#FFFF00', 'border': 1, 'align': 'right', 'valign': 'vcenter', 'font_size': 11})
+    text_fmt = wb.add_format({'align': 'left', 'valign': 'vcenter'})
+    num_fmt = wb.add_format({'num_format': '#,##0.00', 'align': 'right', 'valign': 'vcenter'})
+    num_bold_fmt = wb.add_format({'bold': True, 'num_format': '#,##0.00', 'align': 'right', 'valign': 'vcenter'})
+
+    ws.write(start_row, 0, "Сервис", header_yellow_left)
+    ws.write(start_row, 1, "Доход", header_yellow_right)
+    for r_idx, row in enumerate(df_service.iter_rows(named=True), start=1):
+        ws.write(start_row + r_idx, 0, row.get("Сервис") or "—", text_fmt)
+        ws.write(start_row + r_idx, 1, row.get("Доход", 0.0), num_fmt)
+
+    ws.write(start_row, 3, "Название трека", header_yellow_left)
+    ws.write(start_row, 4, "Исполнитель", header_yellow_left)
+    ws.write(start_row, 5, "Доход", header_yellow_right)
+    for r_idx, row in enumerate(df_track.iter_rows(named=True), start=1):
+        ws.write(start_row + r_idx, 3, row.get("Название трека") or "—", text_fmt)
+        ws.write(start_row + r_idx, 4, row.get("Исполнитель") or "—", text_fmt)
+        ws.write(start_row + r_idx, 5, row.get("Доход", 0.0), num_bold_fmt)
+
+    # Ширина колонок
+    ws.set_column(0, 0, 25)
+    ws.set_column(1, 1, 15)
+    ws.set_column(2, 2, 4)
+    ws.set_column(3, 3, 30)
+    ws.set_column(4, 4, 25)
+    ws.set_column(5, 5, 17) # Чуть шире под колонку ведомости
+
+   
 
 def export_report_distribution_to_excel(
     task_id: int,
@@ -2214,7 +2320,8 @@ def export_report_distribution_to_excel(
                     rtd.final_payout_amount,
                     rut.code AS right_code, 
                     rh.label_id, 
-                    l.code AS label_code
+                    l.code AS label_code, 
+                    l.name AS label_name
                 FROM report_track_rights_distribution rtd
                 JOIN right_category rc ON rc.id = rtd.right_category_id
                 JOIN right_holder rh ON rh.id = rtd.right_holder_id
@@ -2269,7 +2376,9 @@ def export_report_distribution_to_excel(
                         "Кол-во прослушиваний": pl.Int64,   
                         "Сумма выплат": pl.Float64 , 
                         "Сумма выплат автор": pl.Float64,
-                        "Сумма выплат смежка": pl.Float64           
+                        "Сумма выплат смежка": pl.Float64,
+                        "Сервис": pl.String,  
+                        "Период": pl.String        
                     })
             print("Собрали нераспределенные треки...")
             TaskProgress.emit(getattr(current_task.request, 'id', None), "Собрали нераспределенные треки...Начинаем подготовку к экспорту...")
@@ -2310,6 +2419,8 @@ def export_report_distribution_to_excel(
                 header_format = wb.add_format({'bold': True, 'font_size': 12, 'align': 'center', 'valign': 'vcenter'})
                 total_format = wb.add_format({'bold': True, 'font_size': 12})
                 for worksheet in wb.worksheets():
+                    if worksheet.name == "Аналитика": 
+                        continue
                     if worksheet.dim_colmax is not None:
                         worksheet.set_column(0, worksheet.dim_colmax, 15)
                     worksheet.set_row(0, 25, header_format) 
@@ -2351,6 +2462,8 @@ def export_report_distribution_to_excel(
                 df_sheet = df_sheet.join(m_pivot, on="staging_id", how="inner")
 
                 money_cols = [c for c in df_sheet.columns if c.endswith(" Сумма")]
+
+                df_sheet_raw = df_sheet.clone()
                 
                 # Сбор данных для Сводного листа
                 summary_row = df_sheet.select([
@@ -2379,6 +2492,38 @@ def export_report_distribution_to_excel(
                     rh_wb = xlsxwriter.Workbook(rh_filepath)
                     
                     df_sheet.write_excel(rh_wb, worksheet=sheet_name, autofit=True, column_formats=get_column_formats(df_sheet.columns))
+
+                    if money_cols:
+                        df_sheet_raw = df_sheet_raw.with_columns(pl.sum_horizontal(money_cols).alias("Доход"))
+                    else:
+                        df_sheet_raw = df_sheet_raw.with_columns(pl.lit(0.0).alias("Доход"))
+
+                    df_by_service = df_sheet_raw.group_by("Сервис").agg(pl.col("Доход").sum()).sort("Доход", descending=True)
+                    
+                    track_col = "Отчет название трека" if "Отчет название трека" in df_sheet_raw.columns else "Название трека"
+                    artist_col = "Отчет исполнитель" if "Отчет исполнитель" in df_sheet_raw.columns else "Исполнитель"
+                    df_by_track = (
+                        df_sheet_raw.group_by([track_col, artist_col])
+                        .agg(pl.col("Доход").sum())
+                        .rename({track_col: "Название трека", artist_col: "Исполнитель"})
+                        .sort("Доход", descending=True)
+                    )
+
+               
+
+                    last_day = calendar.monthrange(year, month_to)[1]
+                    period_str = f"01.{month_from:02d}.{year} - {last_day}.{month_to:02d}.{year}"
+                    total_income = df_by_service["Доход"].sum()
+                    label_name = df_r_local["label_name"][0] if "label_name" in df_r_local.columns else "ТОО Много Музыки"
+                
+
+                    _write_momu_summary_sheet(
+                        rh_wb, df_by_service, df_by_track, 
+                        label_name, str(group_name), period_str, total_income
+                    )
+
+
+
                     apply_final_formats(rh_wb)
                     rh_wb.close()
                     output_files.append(rh_filepath)
