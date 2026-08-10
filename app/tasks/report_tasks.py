@@ -2099,19 +2099,28 @@ def calculate_and_save_tracks_rights(connection,
         print(f"❌ Ошибка вычислений: {str(e)}")
         return {"status": "error", "message": str(e)}
 
-
-
 from pathlib import Path
+
+
 def _write_momu_summary_sheet(wb, df_service, df_track, label_name, licensor_name, period_str, total_income):
     ws = wb.add_worksheet("Сводный отчет")
 
-    # --- СТИЛИ ДЛЯ ВЕДОМОСТИ ---
-    title_fmt = wb.add_format({'bold': True, 'font_size': 14})
-    subtitle_fmt = wb.add_format({'bold': True, 'font_size': 12})
-    table_head_fmt = wb.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter', 'text_wrap': True})
+  
+    title_fmt    = wb.add_format({'bold': True, 'font_size': 14, 'align': 'center', 'valign': 'vcenter'})
+    subtitle_fmt = wb.add_format({'bold': True, 'font_size': 11, 'align': 'center', 'valign': 'vcenter'})
+    text_fmt     = wb.add_format({'align': 'left', 'valign': 'vcenter'})
+
+
+    bold_fmt       = wb.add_format({'bold': True})
+    gray_italic    = wb.add_format({'font_color': 'gray', 'italic': True, 'font_size': 10})
+    table_head_fmt = wb.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter', 'text_wrap': True, 'bold': True})
     table_cell_fmt = wb.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter'})
-    table_num_fmt = wb.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter', 'num_format': '#,##0.00'})
-    sign_gray_fmt = wb.add_format({'font_color': 'gray', 'italic': True, 'font_size': 10})
+    table_num_fmt  = wb.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter', 'num_format': '#,##0.00'})
+    table_num_fmt_bold  = wb.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter', 'num_format': '#,##0.00', 'bold': True})
+    num_fmt        = wb.add_format({'num_format': '#,##0.00', 'align': 'right', 'valign': 'vcenter'})
+    num_bold_fmt   = wb.add_format({'bold': True, 'num_format': '#,##0.00', 'align': 'right', 'valign': 'vcenter'})
+    yellow_head_l  = wb.add_format({'bold': True, 'bg_color': '#FFFF00', 'border': 1, 'align': 'left', 'valign': 'vcenter', 'font_size': 11})
+    yellow_head_r  = wb.add_format({'bold': True, 'bg_color': '#FFFF00', 'border': 1, 'align': 'right', 'valign': 'vcenter', 'font_size': 11})
 
     # --- ПАРСИНГ ИМЕНИ ЛИЦЕНЗИАРА ---
     match = re.match(r'^(\d+)', licensor_name)
@@ -2119,78 +2128,63 @@ def _write_momu_summary_sheet(wb, df_service, df_track, label_name, licensor_nam
     contract_code = f"№{contract_n}"
     licensor_name = re.sub(r'^\d+[\w_]*\s*', '', licensor_name)
 
-
-    #base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    #logo_path = os.path.join(base_dir, "media", "logo.jpeg")
     logo_path = Path(__file__).resolve().parents[1] / "media" / "logo.jpeg"
-    
     if os.path.exists(logo_path):
-        # Вставляем картинку в ячейку G1 (строка 0, колонка 6). 
-        # Параметры x_scale/y_scale можно поменять, если картинка будет слишком большой или маленькой.
-        ws.insert_image(0, 9, str(logo_path), {'x_scale': 0.1, 'y_scale': 0.1})
+        ws.insert_image(0, 5, str(logo_path), {'x_scale': 0.1, 'y_scale': 0.1})
 
-
-    ws.write(0, 0, "Отчетная ведомость", title_fmt)
-    ws.write(2, 0, f"{label_name} - {licensor_name} - {period_str}", subtitle_fmt)
-    ws.write(4, 0, "Сводный отчет", subtitle_fmt)
-    
-
+    # Шапка документа
+    ws.merge_range(0, 0, 0, 3, "Отчетная ведомость ТОО «Много Музыки»", title_fmt)
+    ws.merge_range(1, 0, 1, 3, "к Лицензионному Договору", subtitle_fmt)
+    ws.merge_range(2, 0, 2, 3, licensor_name, subtitle_fmt)
+    ws.merge_range(3, 0, 3, 3, f"за период  {period_str}", subtitle_fmt)
 
     # Таблица ведомости
-    headers = ["N", "Договор", "Сумма Дохода, KZT", "Роялти Лицензиара, %", "Сумма Дохода Лицензиара, KZT"]
+    headers = ["№ договора", "Доход, KZT", "Роялти Лицензиара, %", "К выплате Лицензиару, KZT"]
     for col, h in enumerate(headers):
         ws.write(6, col, h, table_head_fmt)
     
-    ws.set_row(6, 40) # Делаем шапку таблицы чуть выше
+    ws.set_row(6, 40) 
 
     royalty_percent = NUMBERS.MOMU_BASE_RIGHTS_HOLDER_PERCENT
   
-    ws.write(7, 0, "", table_cell_fmt)
-    ws.write(7, 1, contract_code, table_cell_fmt) 
-    ws.write(7, 2, total_income, table_num_fmt) 
-    ws.write(7, 3, royalty_percent, table_cell_fmt) 
-    ws.write(7, 4, total_income * royalty_percent / 100, table_num_fmt)
+    ws.write(7, 0, contract_code, table_cell_fmt) 
+    ws.write(7, 1, total_income, table_num_fmt) 
+    ws.write(7, 2, royalty_percent, table_cell_fmt) 
+    ws.write(7, 3, total_income * royalty_percent / 100, table_num_fmt_bold)
 
-    ws.write(8, 3, "Итого:", wb.add_format({'bold': True, 'align': 'right'}))
-    ws.write(8, 4, total_income * royalty_percent / 100, wb.add_format({'bold': True, 'align': 'center', 'num_format': '#,##0.00'}))
-
-   
-
+    # --- БЛОК ПОДПИСЕЙ ---
     start_row = 11 
     signature_row = start_row 
 
     # Лицензиар (Слева)
-    ws.write(signature_row, 0, "Лицензиар")
-    ws.write(signature_row + 1, 0, licensor_name, wb.add_format({'bold': True}))
+    ws.write(signature_row, 0, "Лицензиар", text_fmt)
+    ws.write(signature_row + 1, 0, licensor_name, bold_fmt)
     ws.write(signature_row + 3, 0, "_________________________")
-    ws.write(signature_row + 4, 0, "(подпись, печать)", sign_gray_fmt)
+    ws.write(signature_row + 4, 0, "(подпись, печать)", gray_italic)
 
-    # Лицензиат (Справа - под колонкой 3/D)
-    ws.write(signature_row, 3, "Лицензиат")
-    ws.write(signature_row + 1, 3, label_name, wb.add_format({'bold': True}))
-    ws.write(signature_row + 3, 3, "_________________________")
-    ws.write(signature_row + 4, 3, "(подпись, печать)", sign_gray_fmt)
+    # Лицензиат (Справа)
+    ws.write(signature_row, 3, "Лицензиат", text_fmt)
+    ws.write(signature_row + 1, 3, "ТОО «Много Музыки»", bold_fmt)
+    ws.write(signature_row + 2, 3, "Генеральный директор", text_fmt)
+    ws.write(signature_row + 3, 3, "_________________________  /Блиев А.А./", text_fmt)
+    ws.write(signature_row + 4, 3, "(подпись, печать)", gray_italic)
 
-
-    # --- 3. ДВЕ ТАБЛИЦЫ СО СДВИГОМ ВНИЗ (ТЕПЕРЬ СНИЗУ) ---
+    # --- НИЖНИЕ ТАБЛИЦЫ ---
     start_row = signature_row + 7
 
+    ws.merge_range(start_row, 0, start_row, 1, "Доход по основным сервисам", bold_fmt)
+    ws.merge_range(start_row, 3, start_row, 5, "Топ-релиз по доходу", bold_fmt)
+    start_row = start_row + 2
 
-    header_yellow_left = wb.add_format({'bold': True, 'bg_color': '#FFFF00', 'border': 1, 'align': 'left', 'valign': 'vcenter', 'font_size': 11})
-    header_yellow_right = wb.add_format({'bold': True, 'bg_color': '#FFFF00', 'border': 1, 'align': 'right', 'valign': 'vcenter', 'font_size': 11})
-    text_fmt = wb.add_format({'align': 'left', 'valign': 'vcenter'})
-    num_fmt = wb.add_format({'num_format': '#,##0.00', 'align': 'right', 'valign': 'vcenter'})
-    num_bold_fmt = wb.add_format({'bold': True, 'num_format': '#,##0.00', 'align': 'right', 'valign': 'vcenter'})
-
-    ws.write(start_row, 0, "Сервис", header_yellow_left)
-    ws.write(start_row, 1, "Доход", header_yellow_right)
+    ws.write(start_row, 0, "Сервис", yellow_head_l)
+    ws.write(start_row, 1, "Доход", yellow_head_r)
     for r_idx, row in enumerate(df_service.iter_rows(named=True), start=1):
         ws.write(start_row + r_idx, 0, row.get("Сервис") or "—", text_fmt)
         ws.write(start_row + r_idx, 1, row.get("Доход", 0.0), num_fmt)
 
-    ws.write(start_row, 3, "Название трека", header_yellow_left)
-    ws.write(start_row, 4, "Исполнитель", header_yellow_left)
-    ws.write(start_row, 5, "Доход", header_yellow_right)
+    ws.write(start_row, 3, "Название трека", yellow_head_l)
+    ws.write(start_row, 4, "Исполнитель", yellow_head_l)
+    ws.write(start_row, 5, "Доход", yellow_head_r)
     for r_idx, row in enumerate(df_track.iter_rows(named=True), start=1):
         ws.write(start_row + r_idx, 3, row.get("Название трека") or "—", text_fmt)
         ws.write(start_row + r_idx, 4, row.get("Исполнитель") or "—", text_fmt)
@@ -2202,7 +2196,9 @@ def _write_momu_summary_sheet(wb, df_service, df_track, label_name, licensor_nam
     ws.set_column(2, 2, 4)
     ws.set_column(3, 3, 30)
     ws.set_column(4, 4, 25)
-    ws.set_column(5, 5, 17) # Чуть шире под колонку ведомости
+    ws.set_column(5, 5, 17)
+
+
 
    
 
@@ -2884,7 +2880,15 @@ def export_report_distribution_to_excel(
             storage_dir = "/app/storage"
             os.makedirs(storage_dir, exist_ok=True)
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            base_filename = f"report_{year}_{month_from}_{month_to}_{right_category_name}_{right_usage_type_code}"
+            #base_filename = f"report_{year}_{month_from}_{month_to}_{right_category_name}_{right_usage_type_code}"
+            # Получаем уникальные коды лейблов, если включен фильтр
+            label_codes_str = ""
+            if labels and not df_rights.is_empty():
+                unique_codes = [str(c) for c in df_rights["label_code"].unique().to_list() if c]
+                if unique_codes:
+                    label_codes_str = "_" + "_".join(unique_codes)
+
+            base_filename = f"report_{year}_{month_from}_{month_to}_{right_category_name}_{right_usage_type_code}{label_codes_str}"
 
             # Хелпер форматирования чисел
             def get_column_formats(columns_list):
