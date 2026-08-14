@@ -22,6 +22,7 @@ export function ReportPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const { logs, setLogs } = useTaskLogs(activeTaskId);
+  const [downloadUrl, setDownloadUrl] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -67,6 +68,7 @@ export function ReportPage() {
       if (result.task_id) {
         setActiveTaskId(result.task_id);
         setLogs([]);
+        setDownloadUrl(null);
         setMessage('⚙️ Файл отправлен, формирование в фоне. Логи появятся ниже...');
       } else {
         setMessage(result.message || 'Запущено');
@@ -87,6 +89,10 @@ export function ReportPage() {
     const m = lastLog.message;
     if (m.includes('✅') || m.includes('❌') || m.includes('Пайплайн завершён') || m.includes('Пайплайн завершён успешно')) {
       setSubmitting(false);
+    }
+    const match = m.match(/Скачать:\s*(\S+)/);
+    if (match) {
+      setDownloadUrl(match[1]);
     }
   }, [logs, activeTaskId]);
 
@@ -148,6 +154,14 @@ export function ReportPage() {
         <div className="form-group">
           <button type="submit" className="btn btn-primary" disabled={submitting}>{submitting ? 'Отправка...' : 'Отправить'}</button>
         </div>
+
+        {downloadUrl && (
+          <div className="form-group">
+            <a href={downloadUrl} download className="btn btn-primary">
+              Скачать отчёт
+            </a>
+          </div>
+        )}
       </form>
 
       {message && (
@@ -159,7 +173,7 @@ export function ReportPage() {
       <TaskLogsPanel
         activeTaskId={activeTaskId}
         logs={logs}
-        onClose={() => { setActiveTaskId(null); setLogs([]); }}
+        onClose={() => { setActiveTaskId(null); setLogs([]); setDownloadUrl(null); }}
       />
     </div>
   );

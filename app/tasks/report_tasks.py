@@ -13,10 +13,14 @@ from typing import Optional, List
 import re
 import xlsxwriter
 import calendar
+import zipfile
+
+
 
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
+STORAGE_DIR = "/app/storage"
 
 
 
@@ -568,6 +572,7 @@ def process_full_report_pipeline(file_path: str, partner_id: int, right_category
     """
     upload_id = str(uuid.uuid4())
     steps_completed = []
+    task_id = getattr(current_task.request, 'id', None)
 
     # === Шаг 0: Очистка staging таблиц ===
     try:
@@ -598,51 +603,51 @@ def process_full_report_pipeline(file_path: str, partner_id: int, right_category
     
             print(f"Удалены записи с upload_id: {deleted_upload_ids}")
             print(f"🗑️ Удалено старых записей из report: {delete_result.rowcount}")
-            TaskProgress.emit(getattr(current_task.request, 'id', None), f"🗑️ Удалено старых записей из report: {delete_result.rowcount}")
+            TaskProgress.emit(task_id, f"🗑️ Удалено старых записей из report: {delete_result.rowcount}")
 
 
             connection.execute(text("delete from staging_report_agg where upload_id  = ANY(:uids);"), {"uids": deleted_upload_ids})
             connection.execute(text("delete from staging_report_ids where upload_id  = ANY(:uids);"), {"uids": deleted_upload_ids})    
             print("✅ Таблица staging_report_ids готова и очищена")
-            TaskProgress.emit(getattr(current_task.request, 'id', None), "✅ Таблица staging_report_ids готова и очищена")
+            TaskProgress.emit(task_id, "✅ Таблица staging_report_ids готова и очищена")
 
 
-            TaskProgress.emit(getattr(current_task.request, 'id', None), "🧹 Шаг 0: Очистка staging_report и staging_report_agg...")
+            TaskProgress.emit(task_id, "🧹 Шаг 0: Очистка staging_report и staging_report_agg...")
             _cleanup_staging_report_tables(connection, upload_id, report_parameters)
             print("✅ Шаг 0 завершён: staging таблицы очищены")
-            TaskProgress.emit(getattr(current_task.request, 'id', None), "✅ Шаг 0 завершён: staging таблицы очищены")
+            TaskProgress.emit(task_id, "✅ Шаг 0 завершён: staging таблицы очищены")
 
             steps_completed.append("clean_staging")
 
 
             # === Шаг 1: Загрузка и парсинг файла ===
             print("📥 Шаг 1: Загрузка и парсинг файла (process_report_file)...")
-            TaskProgress.emit(getattr(current_task.request, 'id', None), "📥 Шаг 1: Загрузка и парсинг файла (process_report_file)...")
+            TaskProgress.emit(task_id, "📥 Шаг 1: Загрузка и парсинг файла (process_report_file)...")
 
             result = process_report_file(file_path, upload_id)
 
             if result.get("status") != "success":
                 print(f"❌ Шаг 1 (process_report_file) завершился с ошибкой: {result.get('message')}")
-                TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Шаг 1 (process_report_file) завершился с ошибкой: {result.get('message')}")
+                TaskProgress.emit(task_id, f"❌ Шаг 1 (process_report_file) завершился с ошибкой: {result.get('message')}")
                 return {"status": "error", "step": "process_report_file", "message": result.get("message"), "steps_completed": steps_completed}
             print(f"✅ Шаг 1 завершён: process_report_file — загружено строк: {result.get('total_rows')}")
-            TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Шаг 1 завершён: process_report_file — загружено строк: {result.get('total_rows')}")
+            TaskProgress.emit(task_id, f"✅ Шаг 1 завершён: process_report_file — загружено строк: {result.get('total_rows')}")
             steps_completed.append("process_report_file")
 
 
 
             # === Шаг 3: Группировка данных ===
             print(f"📊 Шаг 3: Группировка данных (group_report_data, group_data={group_data})...")
-            TaskProgress.emit(getattr(current_task.request, 'id', None), f"📊 Шаг 3: Группировка данных (group_report_data, group_data={group_data})...")
+            TaskProgress.emit(task_id, f"📊 Шаг 3: Группировка данных (group_report_data, group_data={group_data})...")
 
             result = group_report_data(connection, group_data, upload_id)
 
             if result.get("status") != "success":
                 print(f"❌ Шаг 3 (group_report_data) завершился с ошибкой: {result.get('message')}")
-                TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Шаг 3 (group_report_data) завершился с ошибкой: {result.get('message')}")
+                TaskProgress.emit(task_id, f"❌ Шаг 3 (group_report_data) завершился с ошибкой: {result.get('message')}")
                 return {"status": "error", "step": "group_report_data", "message": result.get("message"), "steps_completed": steps_completed}
             print(f"✅ Шаг 3 завершён: group_report_data — агрегировано: {result.get('rows_aggregated')}")
-            TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Шаг 3 завершён: group_report_data — агрегировано: {result.get('rows_aggregated')}")
+            TaskProgress.emit(task_id, f"✅ Шаг 3 завершён: group_report_data — агрегировано: {result.get('rows_aggregated')}")
             steps_completed.append("group_report_data")
 
 
@@ -650,7 +655,7 @@ def process_full_report_pipeline(file_path: str, partner_id: int, right_category
             # === Шаг 4: Проверка sum(payout_amount) ===
             try:
                 print("🔍 Шаг 4: Проверка sum(payout_amount) staging_report == staging_report_agg...")
-                TaskProgress.emit(getattr(current_task.request, 'id', None), "🔍 Шаг 4: Проверка sum(payout_amount) staging_report == staging_report_agg...")
+                TaskProgress.emit(task_id, "🔍 Шаг 4: Проверка sum(payout_amount) staging_report == staging_report_agg...")
                 row = connection.execute(text("""
                     SELECT
                         (SELECT COALESCE(SUM(COALESCE(NULLIF(REPLACE(payout_amount, ',', '.'), ''), '0')::NUMERIC(20,8)), 0) FROM staging_report WHERE upload_id = :uid) AS sum_staging,
@@ -661,26 +666,26 @@ def process_full_report_pipeline(file_path: str, partner_id: int, right_category
                 if sum_staging != sum_agg:
                     msg = f"Суммы payout_amount не совпадают: staging_report={sum_staging}, staging_report_agg={sum_agg}"
                     print(f"❌ Шаг 4: {msg}")
-                    TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Шаг 4: {msg}")
+                    TaskProgress.emit(task_id, f"❌ Шаг 4: {msg}")
                     return {"status": "error", "step": "verify_payout_amount", "message": msg, "steps_completed": steps_completed, "sum_staging": str(sum_staging), "sum_agg": str(sum_agg)}
                 print(f"✅ Шаг 4 завершён: суммы совпадают ({sum_staging})")
-                TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Шаг 4 завершён: суммы совпадают ({sum_staging})")
+                TaskProgress.emit(task_id, f"✅ Шаг 4 завершён: суммы совпадают ({sum_staging})")
                 steps_completed.append("verify_payout_amount")
             except Exception as e:
                 print(f"❌ Шаг 4 (проверка payout_amount): {e}")
-                TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Шаг 4 (проверка payout_amount): {e}")
+                TaskProgress.emit(task_id, f"❌ Шаг 4 (проверка payout_amount): {e}")
                 return {"status": "error", "step": "verify_payout_amount", "message": str(e), "steps_completed": steps_completed}
 
             # === Шаг 5: Перенос данных в итоговую таблицу report ===
             print("📝 Шаг 5: Перенос данных в итоговую таблицу (insert_data_into_final_report_table)...")
-            TaskProgress.emit(getattr(current_task.request, 'id', None), "📝 Шаг 5: Перенос данных в итоговую таблицу (insert_data_into_final_report_table)...")
+            TaskProgress.emit(task_id, "📝 Шаг 5: Перенос данных в итоговую таблицу (insert_data_into_final_report_table)...")
             result = insert_data_into_final_report_table(connection, partner_id, right_category_id, right_usage_type_id, month, year, upload_id)
             if result.get("status") != "success":
                 print(f"❌ Шаг 5 (insert_data_into_final_report_table) завершился с ошибкой: {result.get('message')}")
-                TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Шаг 5 (insert_data_into_final_report_table) завершился с ошибкой: {result.get('message')}")
+                TaskProgress.emit(task_id, f"❌ Шаг 5 (insert_data_into_final_report_table) завершился с ошибкой: {result.get('message')}")
                 return {"status": "error", "step": "insert_data_into_final_report_table", "message": result.get("message"), "steps_completed": steps_completed}
             print(f"✅ Шаг 5 завершён: insert_data_into_final_report_table — записей: {result.get('report_records_added')}, экспортировано: {result.get('rows_exported')}")
-            TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Шаг 5 завершён: insert_data_into_final_report_table — записей: {result.get('report_records_added')}, экспортировано: {result.get('rows_exported')}")
+            TaskProgress.emit(task_id, f"✅ Шаг 5 завершён: insert_data_into_final_report_table — записей: {result.get('report_records_added')}, экспортировано: {result.get('rows_exported')}")
             steps_completed.append("insert_data_into_final_report_table")
 
 
@@ -698,16 +703,23 @@ def process_full_report_pipeline(file_path: str, partner_id: int, right_category
         steps_completed.append("export_report_to_excel")    
 
         print("🎉 Пайплайн завершён успешно!")
-        TaskProgress.emit(getattr(current_task.request, 'id', None), "🎉 Пайплайн завершён успешно!")
+        TaskProgress.emit(task_id, "🎉 Пайплайн завершён успешно!")
+
+
+        base_url = os.getenv("BACKEND_API_URL", "http://localhost:8000/api")
+        download_url = f"{base_url}/v1/report/download/{os.path.basename(export_result.get('output_file'))}"
+        TaskProgress.emit(task_id, f"✅ Отчёт готов. Скачать: {download_url}")
+
         return {
             "status": "success",
             "steps_completed": steps_completed,
-            "final_result": result
+            "final_result": result,
+            "download_url": download_url
         }
 
     except Exception as e:
         print(f"❌ Пайплайн прерван на шаге {steps_completed[-1] if steps_completed else 'начало'}: {e}")
-        TaskProgress.emit(getattr(current_task.request, 'id', None), f"❌ Ошибка: {e}")
+        TaskProgress.emit(task_id, f"❌ Ошибка: {e}")
         return {
             "status": "error",
             "step": steps_completed[-1] if steps_completed else "setup",
@@ -1353,7 +1365,7 @@ def calculate_report_data(task_id: str, year: int, month_from: int, month_to: in
         else f"= {right_category_id}"
     )
     
-    # 2. Сам SQL-запрос
+    
     sql_query = f"""
         DELETE FROM report_track_rights_distribution 
         WHERE report_id IN (
@@ -1386,13 +1398,12 @@ def calculate_report_data(task_id: str, year: int, month_from: int, month_to: in
         ),
         totals AS (
             SELECT fc.*,
-                -- Возвращаем твой родной, исходный подсчет долей (он работал правильно!)
+               
                 SUM(fc.share_percentage) OVER (
                     PARTITION BY fc.staging_id, fc.track_id, fc.right_category_id
                 ) AS total_found_shares,
                 
-                -- ТОЧЕЧНОЕ ДОБАВЛЕНИЕ: Считаем, сколько РЕАЛЬНЫХ категорий прав (с долей > 0) привязано к staging_id.
-                -- Если для одного staging_id есть и живые авторы, и живая смежка — тут будет цифра 2.
+                
                 (
                     CASE WHEN EXISTS (
                         SELECT 1 FROM report_track_rights_cache rtc2 
@@ -1545,16 +1556,44 @@ def create_report_task(partner_id: Optional[int] = None, year: int = None, month
 
         is_momu = labels_list and len(labels_list) == 1 and labels_list[0] == 27
         if is_momu:
-            export_report_distribution_to_excel_momu(task_id, partner_id, year, month_from, month_to, right_category_id, right_usage_type_id, labels_list, is_momu)
+            result= export_report_distribution_to_excel_momu(task_id, partner_id, year, month_from, month_to, right_category_id, right_usage_type_id, labels_list, is_momu)
         else:
-            export_report_distribution_to_excel(task_id, partner_id, year, month_from, month_to, right_category_id, right_usage_type_id, labels_list, is_momu)
+            result = export_report_distribution_to_excel(task_id, partner_id, year, month_from, month_to, right_category_id, right_usage_type_id, labels_list, is_momu)
         
         print(f"✅ Задача создания отчета завершена успешно")
         TaskProgress.emit(task_id, "✅ Задача создания отчета завершена успешно")
+
         
+        if result.get("status") != "success":
+            raise Exception(result.get("message"))
+
+        output_files = result.get("output_files", [])
+        if not output_files:
+            raise Exception("Файлы не сгенерированы")
+
+        # --- Если файлов много, упаковываем в ZIP ---
+        if len(output_files) > 1:
+            zip_name = f"report_{year}_{month_from}_{month_to}_{right_category_id}_{right_usage_type_id}.zip"
+            zip_path = os.path.join("/app/storage", zip_name)
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for f in output_files:
+                    zipf.write(f, arcname=os.path.basename(f))
+                    os.remove(f)  # удаляем исходные файлы после архивации
+            final_file_path = zip_path
+        else:
+            final_file_path = output_files[0]
+
+        base_url = os.getenv("BACKEND_API_URL", "http://localhost:8000/api")
+        download_url = f"{base_url}/v1/report/download/{os.path.basename(final_file_path)}"
+        TaskProgress.emit(task_id, f"✅ Отчёт готов. Скачать: {download_url}")
+
+
         return {
             "status": "success",
             "task_id": task_id,
+            "file_path": final_file_path,          # абсолютный путь на сервере
+            "file_name": os.path.basename(final_file_path),  # имя файла для скачивания
+            "is_zip": len(output_files) > 1,
             "params": {
                 "partner_id": partner_id,
                 "year": year,
@@ -2212,7 +2251,7 @@ def export_report_distribution_to_excel_momu(
     right_usage_type_id: int = None,
     labels: Optional[List[int]] = None,
     is_momu_mode: bool = False
-):
+    ):
     if right_category_id == RightCategory.BOTH:
         category_filter = f"IN ({RightCategory.AUTHOR}, {RightCategory.RELATED}, {RightCategory.BOTH})"
     else:
@@ -2696,7 +2735,7 @@ def export_report_distribution_to_excel(
     right_usage_type_id: int = None,
     labels: Optional[List[int]] = None,
     is_momu_mode: bool = False
-):
+    ):
     if right_category_id == RightCategory.BOTH:
         category_filter = f"IN ({RightCategory.AUTHOR}, {RightCategory.RELATED}, {RightCategory.BOTH})"
     else:

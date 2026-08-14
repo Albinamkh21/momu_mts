@@ -1,4 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional as TypingOptional
 import shutil
@@ -15,7 +16,7 @@ from tasks.report_tasks import (
 )
 
 router = APIRouter()
-
+STORAGE_DIR = "/app/storage"
 
 class ReportDataRequest(BaseModel):
     partner_id: int
@@ -24,7 +25,7 @@ class ReportDataRequest(BaseModel):
     month: int = Field(..., ge=1, le=12)
     year: int
 
-STORAGE_DIR = "/app/storage"
+
 
 
 @router.get("/partners")
@@ -571,4 +572,17 @@ async def export_report_distribution_endpoint(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка при запуске экспорта распределённого отчёта: {str(e)}")
+
+STORAGE_DIR = "/app/storage"
+@router.get("/download/{filename}")
+async def download_file(filename: str):
+    # Защита от path traversal – разрешаем только файлы из storage
+    safe_path = os.path.join(STORAGE_DIR, os.path.basename(filename))
+    if not os.path.exists(safe_path):
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    return FileResponse(
+        path=safe_path,
+        filename=filename,
+        media_type="application/octet-stream"
+    )        
 
