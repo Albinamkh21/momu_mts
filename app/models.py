@@ -434,20 +434,7 @@ t_track_full_info = Table(
 )
 
 
-class User(Base):
-    __tablename__ = 'user'
-    __table_args__ = (
-        PrimaryKeyConstraint('id', name='user_pkey'),
-        UniqueConstraint('email', name='user_email_key'),
-        UniqueConstraint('full_name', name='user_full_name_key'),
-        UniqueConstraint('login', name='user_login_key')
-    )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    full_name: Mapped[str] = mapped_column(CITEXT, nullable=False)
-    login: Mapped[str] = mapped_column(String(255), nullable=False)
-    email: Mapped[str] = mapped_column(String(255), nullable=False)
-    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class Partners(Base):
