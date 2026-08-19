@@ -2443,7 +2443,7 @@ def export_report_distribution_to_excel_momu(
                 df_r_local = df_rights.filter(pl.col(group_col) == uid)
                 group_name = df_r_local[name_col][0]
                 
-                # 1. Строгое определение категорий по ID (без текста и регексов)
+                
                 df_r_local = df_r_local.with_columns(
                     pl.when(pl.col("right_category_id") == RightCategory.AUTHOR)
                     .then(pl.lit("автор"))
@@ -2615,7 +2615,7 @@ def export_report_distribution_to_excel_momu(
                
 
             
-                std_wb.close()
+                
 
             return {"status": "success", "rows_exported": len(df_base), "output_files": output_files}
 
