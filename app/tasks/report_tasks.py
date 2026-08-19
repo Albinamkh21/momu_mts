@@ -707,14 +707,15 @@ def process_full_report_pipeline(file_path: str, partner_id: int, right_category
 
 
         base_url = os.getenv("BACKEND_API_URL", "http://localhost:8000/api")
-        download_url = f"{base_url}/v1/report/download/{os.path.basename(export_result.get('output_file'))}"
-        TaskProgress.emit(task_id, f"✅ Отчёт готов. Скачать: {download_url}")
+        #download_url = f"{base_url}/v1/report/download/{os.path.basename(export_result.get('output_file'))}"
+        filename = os.path.basename(export_result.get('output_file'))
+        TaskProgress.emit(task_id, f"✅ Отчёт готов. Скачать: {filename}")
 
         return {
             "status": "success",
             "steps_completed": steps_completed,
             "final_result": result,
-            "download_url": download_url
+            "file_name": filename
         }
 
     except Exception as e:
@@ -1365,17 +1366,17 @@ def calculate_report_data(task_id: str, year: int, month_from: int, month_to: in
         else f"= {right_category_id}"
     )
     
+    delete_query = f""" 
     
-    sql_query = f"""
         DELETE FROM report_track_rights_distribution 
         WHERE report_id IN (
             SELECT id FROM report 
             WHERE report_year = :year 
             AND report_month BETWEEN :month_from AND :month_to
-            AND right_category_id  {category_filter}
-            AND right_usage_type_id = :right_usage_type_id
+            
         );
-
+        """
+    insert_query = f"""
         WITH filtered_cache AS (
             SELECT 
                 rtc.staging_id, rtc.track_id, rtc.right_holder_id, rtc.right_category_id, 
@@ -1391,10 +1392,7 @@ def calculate_report_data(task_id: str, year: int, month_from: int, month_to: in
             JOIN right_holder rh ON rh.id = rtc.right_holder_id
             WHERE r.report_year = :year 
             AND r.report_month BETWEEN :month_from AND :month_to
-            AND r.right_category_id  {category_filter}
-            AND r.right_usage_type_id = :right_usage_type_id
-            {label_filter}
-            AND rtc.right_category_id {category_filter}
+           
         ),
         totals AS (
             SELECT fc.*,
@@ -1482,12 +1480,13 @@ def calculate_report_data(task_id: str, year: int, month_from: int, month_to: in
         "month_from": month_from,
         "month_to": month_to,
     }
+    with engine.connect() as conn:
+        conn.execute(text(delete_query), query_params)
+        conn.execute(text(insert_query), query_params)
+        conn.commit()
   
 
-    # 4. Выполнение
-    with engine.connect() as conn:
-        conn.execute(text(sql_query), query_params)
-        conn.commit()
+
 
 
 
@@ -1584,15 +1583,16 @@ def create_report_task(partner_id: Optional[int] = None, year: int = None, month
             final_file_path = output_files[0]
 
         base_url = os.getenv("BACKEND_API_URL", "http://localhost:8000/api")
-        download_url = f"{base_url}/v1/report/download/{os.path.basename(final_file_path)}"
-        TaskProgress.emit(task_id, f"✅ Отчёт готов. Скачать: {download_url}")
+        #download_url = f"{base_url}/v1/report/download/{os.path.basename(final_file_path)}"
+        filename = os.path.basename(final_file_path)
+        TaskProgress.emit(task_id, f"✅ Отчёт готов. Скачать: {filename}")
 
 
         return {
             "status": "success",
             "task_id": task_id,
             "file_path": final_file_path,          # абсолютный путь на сервере
-            "file_name": os.path.basename(final_file_path),  # имя файла для скачивания
+            "file_name": filename,                # имя файла
             "is_zip": len(output_files) > 1,
             "params": {
                 "partner_id": partner_id,
@@ -2272,8 +2272,8 @@ def export_report_distribution_to_excel_momu(
         labels_params = {}
         if labels:
             placeholders = ",".join([f":lid{i}" for i in range(len(labels))])
-            labels_condition_base = f" AND t.label_id IN ({placeholders}) "
-            labels_condition_rights = f" AND l.id IN ({placeholders}) "  # Исправлено tl на rh для консистентности
+            labels_condition_base = f" AND tl.label_id IN ({placeholders}) "
+            labels_condition_rights = f" AND l.id IN ({placeholders}) " 
             for i, lid in enumerate(labels):
                 labels_params[f"lid{i}"] = lid
 
@@ -2310,6 +2310,7 @@ def export_report_distribution_to_excel_momu(
             JOIN report r ON r.upload_id = ra.upload_id
             JOIN report_track_rights_cache rtc ON rtc.staging_id = ra.id
             JOIN mv_track_extended t ON t.track_id = rtc.track_id
+            JOIN track_label tl ON tl.track_id = t.track_id
             JOIN right_usage_type rut ON rut.id = r.right_usage_type_id
             WHERE r.report_year = :year
             AND r.report_month BETWEEN :month_from AND :month_to
@@ -2379,53 +2380,7 @@ def export_report_distribution_to_excel_momu(
             TaskProgress.emit(getattr(current_task.request, 'id', None), "Собрали права... Переходим к сбору нераспределенных треков...")
 
 
-            # Запрос нераспределенных треков
-            unclaimed_query = text(f"""
-                SELECT 
-                    ra.id AS staging_id,
-                    ra.label_own_code::VARCHAR AS "Отчет код лейбла",
-                    ra.isrc::VARCHAR AS "Отчет ISRC",
-                    ra.track_name AS "Отчет название трека",
-                    ra.artist_name AS "Отчет исполнитель",
-                    ra.authors AS "Отчет авторы",
-                    ra.play_count AS "Кол-во прослушиваний",
-                    ra.payout_amount AS "Сумма выплат",
-                    ra.payout_amount_author AS "Сумма выплат автор",
-                    ra.payout_amount_related AS "Сумма выплат смежка",
-                    ra.service_name AS "Сервис",
-                    ra.period AS "Период"
-                FROM staging_report_agg ra
-                JOIN report r ON r.upload_id = ra.upload_id
-                WHERE r.report_year = :year
-                AND r.report_month BETWEEN :month_from AND :month_to
-                AND r.right_category_id {category_filter}
-                AND r.right_usage_type_id {usage_filter}
-                {partner_condition}
-                AND NOT EXISTS (
-                    SELECT 1 
-                    FROM report_track_rights_distribution rtrd 
-                    WHERE rtrd.staging_id = ra.id 
-                    AND rtrd.report_id = r.id
-                )
-            """)
-            df_unclaimed = pl.read_database(unclaimed_query, conn, execute_options={"parameters": query_params},
-                schema_overrides={
-                        "staging_id": pl.Int64,
-                        "Отчет код лейбла": pl.String,    
-                        "Отчет ISRC": pl.String,
-                        "Отчет название трека": pl.String,
-                        "Отчет исполнитель": pl.String,
-                        "Отчет авторы": pl.String,
-                        "Кол-во прослушиваний": pl.Int64,   
-                        "Сумма выплат": pl.Float64 , 
-                        "Сумма выплат автор": pl.Float64,
-                        "Сумма выплат смежка": pl.Float64,
-                        "Сервис": pl.String,  
-                        "Период": pl.String        
-                    })
-            print("Собрали нераспределенные треки...")
-            TaskProgress.emit(getattr(current_task.request, 'id', None), "Собрали нераспределенные треки...Начинаем подготовку к экспорту...")
-
+          
 
             meta_row = conn.execute(text(f"""
                 SELECT
@@ -2659,59 +2614,7 @@ def export_report_distribution_to_excel_momu(
                 output_files.append(rh_filepath)
                
 
-            # ---------- 5. Запись Сводного отчета и Нераспределенного ----------
-            sys_wb = None
-            if is_momu_mode and (all_summaries or df_unclaimed.height > 0):
-                sys_filepath = os.path.join(storage_dir, f"{base_filename}_SUMMARY_{timestamp}.xlsx")
-                sys_wb = xlsxwriter.Workbook(sys_filepath)
-                output_files.append(sys_filepath)
-            else:
-                sys_wb = std_wb
-
-            if sys_wb:
-                # Запись сводного листа
-                if all_summaries:
-                    df_summary = pl.concat(all_summaries, how="diagonal").fill_null(0)
-                    df_summary = df_summary.group_by("Правообладатель").sum()
-
-                    df_summary = df_summary.with_columns(pl.col("Правообладатель").cast(pl.Utf8))
-                    summary_total = {col: None for col in df_summary.columns}
-                    summary_total["Правообладатель"] = "ИТОГО"
-                    
-                    for col in df_summary.columns:
-                        if col != "Правообладатель":
-                            summary_total[col] = df_summary[col].sum()
-                            
-                    df_sum_total = pl.DataFrame([summary_total], schema=df_summary.schema)
-                    df_summary = pl.concat([df_summary, df_sum_total])
-
-                    df_summary.write_excel(sys_wb, worksheet="Сводный отчет", autofit=True, column_formats=get_column_formats(df_summary.columns))
-
-                # Запись нераспределенного
-                if df_unclaimed.height > 0:
-                    df_unclaimed = df_unclaimed.with_columns(pl.col("Отчет код лейбла").cast(pl.Utf8))
-                    unclaimed_total = {col: None for col in df_unclaimed.columns}
-                    unclaimed_total["Отчет код лейбла"] = "ИТОГО"
-                    
-                    if "Сумма выплат" in df_unclaimed.columns:
-                        unclaimed_total["Сумма выплат"] = df_unclaimed["Сумма выплат"].sum()
-
-                    for col in ["Сумма выплат автор", "Сумма выплат смежка"]:
-                        if col in df_unclaimed.columns:
-                            unclaimed_total[col] = df_unclaimed[col].sum()    
-                        
-                    df_uncl_total = pl.DataFrame([unclaimed_total], schema=df_unclaimed.schema)
-                    df_unclaimed = pl.concat([df_unclaimed, df_uncl_total])
-
-                    df_unclaimed.write_excel(sys_wb, worksheet="Нераспределенное", autofit=True, column_formats=get_column_formats(df_unclaimed.columns))
-
-                # Красим финальные системные листы
-                apply_final_formats(sys_wb)
-
-            # ---------- 6. Закрытие файловых дескрипторов ----------
-            if is_momu_mode and sys_wb:
-                sys_wb.close()
-            if not is_momu_mode and std_wb:
+            
                 std_wb.close()
 
             return {"status": "success", "rows_exported": len(df_base), "output_files": output_files}
@@ -2756,7 +2659,7 @@ def export_report_distribution_to_excel(
         labels_params = {}
         if labels:
             placeholders = ",".join([f":lid{i}" for i in range(len(labels))])
-            labels_condition_base = f" AND t.label_id IN ({placeholders}) "
+            labels_condition_base = f" AND tl.label_id IN ({placeholders}) "
             labels_condition_rights = f" AND l.id IN ({placeholders}) "  # Исправлено tl на rh для консистентности
             for i, lid in enumerate(labels):
                 labels_params[f"lid{i}"] = lid
@@ -2800,6 +2703,7 @@ def export_report_distribution_to_excel(
             JOIN report r ON r.upload_id = ra.upload_id
             JOIN report_track_rights_cache rtc ON rtc.staging_id = ra.id
             JOIN mv_track_extended t ON t.track_id = rtc.track_id
+            JOIN track_label tl on tl.track_id = t.track_id
             WHERE r.report_year = :year
             AND r.report_month BETWEEN :month_from AND :month_to
             AND r.right_category_id {category_filter}
@@ -2903,17 +2807,22 @@ def export_report_distribution_to_excel(
             TaskProgress.emit(getattr(current_task.request, 'id', None), "Собрали нераспределенные треки...Начинаем подготовку к экспорту...")
 
 
-            meta_row = conn.execute(text(f"""
-                SELECT
-                    string_agg(DISTINCT rc.name, ', ') AS right_category_name,
-                    string_agg(DISTINCT rut.code, ', ') AS right_usage_type_code
-                FROM right_category rc
-                JOIN right_usage_type rut ON rut.id {usage_filter}  
-                WHERE rc.id = :right_category_id
-            """), {"right_category_id": right_category_id, "right_usage_type_id": right_usage_type_id}).fetchone()
+            # ---------- Формирование чистых названий для файла ----------
+            # 1. Категория прав
+            if right_category_id == RightCategory.BOTH:
+                right_category_name = "ALL_CAT"
+            else:
+                rc_name = conn.execute(text("SELECT name FROM right_category WHERE id = :id"), {"id": right_category_id}).scalar()
+                # Убираем пробелы и спецсимволы на случай, если они есть в одиночном названии
+                right_category_name = str(rc_name).replace(' ', '').replace('&', 'And') if rc_name else str(right_category_id)
 
-            right_category_name = (meta_row.right_category_name if meta_row and meta_row.right_category_name else str(right_category_id))
-            right_usage_type_code = (meta_row.right_usage_type_code if meta_row and meta_row.right_usage_type_code else str(right_usage_type_id))
+            # 2. Тип использования
+            if right_usage_type_id == RightUsageType.ALL:
+                right_usage_type_code = "ALL_TYPES"
+            else:
+                rut_code = conn.execute(text("SELECT code FROM right_usage_type WHERE id = :id"), {"id": right_usage_type_id}).scalar()
+                right_usage_type_code = str(rut_code) if rut_code else str(right_usage_type_id)
+
 
             # ---------- 3. Подготовка окружения файлов ----------
             storage_dir = "/app/storage"

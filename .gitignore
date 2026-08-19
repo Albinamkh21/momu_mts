@@ -1,6 +1,7 @@
 .env
 backups/
 app/storage/
+app/logs/
 dist/
 node_modules/
 *.log

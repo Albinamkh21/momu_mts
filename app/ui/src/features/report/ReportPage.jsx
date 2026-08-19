@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { getPartners, getRightCategories, getRightUsageTypes, uploadReport } from './api/report.api';
+import { getPartners, getRightCategories, getRightUsageTypes, uploadReport, downloadReport } from './api/report.api';
 import { useTaskLogs } from '../../hooks/useTaskLogs';
 import TaskLogsPanel from '../../components/TaskLogsPanel';
 
@@ -44,6 +44,15 @@ export function ReportPage() {
     setForm((s) => ({ ...s, [name]: type === 'checkbox' ? checked : value }));
   };
 
+  const handleDownload = async (filename) => {
+    try {
+      await downloadReport(filename);
+    } catch (error) {
+      console.error('Ошибка при скачивании отчёта:', error);
+      setMessage('❌ Не удалось скачать файл отчёта');
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!file) {
@@ -68,7 +77,9 @@ export function ReportPage() {
       if (result.task_id) {
         setActiveTaskId(result.task_id);
         setLogs([]);
-        setDownloadUrl(null);
+        if (result.file_name) {
+          setDownloadUrl(result.file_name);
+        }
         setMessage('⚙️ Файл отправлен, формирование в фоне. Логи появятся ниже...');
       } else {
         setMessage(result.message || 'Запущено');
@@ -90,9 +101,9 @@ export function ReportPage() {
     if (m.includes('✅') || m.includes('❌') || m.includes('Пайплайн завершён') || m.includes('Пайплайн завершён успешно')) {
       setSubmitting(false);
     }
-    const match = m.match(/Скачать:\s*(\S+)/);
-    if (match) {
-      setDownloadUrl(match[1]);
+    if (m.includes('Скачать:')) {
+      const filename = m.split('Скачать:').pop().trim();
+      setDownloadUrl(filename);
     }
   }, [logs, activeTaskId]);
 
@@ -156,12 +167,15 @@ export function ReportPage() {
         </div>
 
         {downloadUrl && (
-          <div className="form-group">
-            <a href={downloadUrl} download className="btn btn-primary">
+          <div className="form-group" style={{ marginTop: '16px' }}>
+            <button type="button"  className="btn btn-primary" 
+              onClick={() => downloadReport(downloadUrl)}
+            >
               Скачать отчёт
-            </a>
+            </button>
           </div>
         )}
+      
       </form>
 
       {message && (

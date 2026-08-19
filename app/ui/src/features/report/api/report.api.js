@@ -43,3 +43,27 @@ export const createReport = async (partnerId, year, monthFrom, monthTo, rightCat
   });
   return data;
 };
+
+export const downloadReport = async (filename) => {
+  // encodeURIComponent экранирует спецсимволы (&, пробелы, ?, #) в URL
+  const safeFilename = encodeURIComponent(filename);
+
+  const response = await httpClient.get(`/v1/report/download/${safeFilename}`, {
+    responseType: 'blob',
+  });
+
+  // Создаем ссылку на скачивание
+  const url = window.URL.createObjectURL(new Blob([response.data]));
+  const link = document.createElement('a');
+  link.href = url;
+  
+  // Оригинальное имя файла для сохранения на компьютере
+  link.setAttribute('download', filename);
+
+  document.body.appendChild(link);
+  link.click();
+
+  // Очистка памяти
+  link.parentNode.removeChild(link);
+  window.URL.revokeObjectURL(url);
+};
