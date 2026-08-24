@@ -100,45 +100,48 @@ class EmailService:
                 logger.error(f"[EMAIL MOCK ERROR] Error saving email: {err}")
                 
         # MODE 2: Send via SMTP (production mode)
+        # MODE 2: Send via SMTP (production mode)
         elif email_mode == 'smtp':
             try:
-                # Import here to avoid dependency issues if not needed
                 import aiosmtplib
                 from email.mime.text import MIMEText
                 from email.mime.multipart import MIMEMultipart
                 
-                # Get SMTP configuration from environment
-                smtp_host = os.getenv('SMTP_HOST', 'smtp.gmail.com')
-                smtp_port = int(os.getenv('SMTP_PORT', '587'))
-                smtp_user = os.getenv('SMTP_USER')
-                smtp_password = os.getenv('SMTP_PASSWORD')
+                # 1. Используем переменные в точности как в вашем .env
+                smtp_host = os.getenv('mail_server', 'smtp.gmail.com')
+                smtp_port = int(os.getenv('mail_port', '587'))
+                smtp_user = os.getenv('EMAIL_USER')
+                smtp_password = os.getenv('EMAIL_PASS')
+                
+                # Отправитель (оставляем MOMU)
                 smtp_from = os.getenv('SMTP_FROM', '"MOMU" <noreply@momu.kz>')
                 
                 if not smtp_user or not smtp_password:
-                    logger.error("[EMAIL ERROR] SMTP_USER or SMTP_PASSWORD not set")
+                    logger.error("[EMAIL ERROR] EMAIL_USER or EMAIL_PASS not set")
                     return
                 
-                # Create message
+                # Создаем сообщение
                 message = MIMEMultipart('alternative')
                 message['Subject'] = subject
                 message['From'] = smtp_from
                 message['To'] = email
                 
-                # Add HTML content
+                # Добавляем HTML
                 html_part = MIMEText(html_content, 'html')
                 message.attach(html_part)
                 
-                # Send email
+                # 2. Отправляем письмо
                 await aiosmtplib.send(
                     message,
                     hostname=smtp_host,
                     port=smtp_port,
                     username=smtp_user,
                     password=smtp_password,
-                    use_tls=True
+                    start_tls=True  # ВАЖНО: для 587 порта (Gmail) нужен STARTTLS, а не use_tls!
                 )
                 
-                logger.info(f"[EMAIL] Email successfully sent to {email}")
+                logger.info(f"[EMAIL] Письмо успешно отправлено на {email}")
                 
             except Exception as err:
                 logger.error(f"[EMAIL ERROR] Error sending email: {err}")
+      

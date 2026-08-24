@@ -33,3 +33,4 @@ bcrypt
 PyJWT
 aiosmtplib
 email-validator
+
