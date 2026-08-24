@@ -53,6 +53,8 @@ services:
       CELERY_BROKER_URL: ${CELERY_BROKER_URL}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
       DATABASE_URL: ${DATABASE_URL}
+      FRONTEND_URL: ${FRONTEND_URL}
+      
     ports:
       - "${APP_PORT}:${APP_PORT}"
     env_file:
@@ -82,6 +84,7 @@ services:
       CELERY_BROKER_URL: ${CELERY_BROKER_URL}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
       DATABASE_URL: ${DATABASE_URL} 
+      FRONTEND_URL: ${FRONTEND_URL}
     env_file:
       - .env
     depends_on:
