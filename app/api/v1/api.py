@@ -7,9 +7,17 @@ from api.v1.endpoints.catalogs_v2 import router as catalog_v2_router
 from api.v1.endpoints.reports import router as report_router
 from api.v1.endpoints.users import router as users_router
 from api.v1.endpoints.auth import router as auth_router
+from api.v1.endpoints.dictionaries import router as dictionaries_router
 
 api_router = APIRouter()
 api_router.include_router(auth_router, prefix="/auth", tags=["Auth"])
+
+api_router.include_router(
+    dictionaries_router,
+    prefix="/dictionaries",
+    tags=["Dictionaries"],
+    dependencies=[Depends(get_current_user)],
+)
 
 api_router.include_router(
     catalog_router, 

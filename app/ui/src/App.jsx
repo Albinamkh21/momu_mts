@@ -7,6 +7,7 @@ import { PersonDetailPage } from './features/tracks/PersonDetailPage';
 import { CatalogPage } from './features/catalog/CatalogPage';
 import { ReportPage } from './features/report/ReportPage';
 import { CreateReportPage } from './features/report/CreateReportPage';
+import { DictionariesPage } from './features/dictionaries/DictionariesPage';
 import { AuthPage } from './features/auth/AuthPage';
 import { ForgotPassword } from './features/auth/ForgotPassword';
 import { ResetPassword } from './features/auth/ResetPassword';
@@ -58,6 +59,7 @@ function App() {
   const goToCatalog = () => setPage({ type: 'catalog', prev: page });
   const goToReport = () => setPage({ type: 'report', prev: page });
   const goToCreateReport = () => setPage({ type: 'createReport', prev: page });
+  const goToDictionaries = () => setPage({ type: 'dictionaries', prev: page });
   const goToTracks = () => setPage({ type: 'list', prev: page });
   const goToForgotPassword = () => setPage({ type: 'forgotPassword' });
   const goBackToAuth = () => setPage({ type: 'auth' });
@@ -129,6 +131,7 @@ function App() {
             if (mod === 'catalog') goToCatalog();
             else if (mod === 'report') goToReport();
             else if (mod === 'createReport') goToCreateReport();
+            else if (mod === 'dictionaries') goToDictionaries();
             else goToTracks();
           }}
         >
@@ -146,6 +149,10 @@ function App() {
 
           {page.type === 'report' && (
             <ReportPage />
+          )}
+
+          {page.type === 'dictionaries' && (
+            <DictionariesPage />
           )}
 
           {page.type === 'createReport' && (

@@ -7,6 +7,7 @@ export function MainLayout({ children, currentPage, currentUser, onLogout, onMen
   const isCatalogActive = currentPage === 'catalog';
   const isReportActive = currentPage === 'report';
   const isCreateReportActive = currentPage === 'createReport';
+  const isDictionariesActive = currentPage === 'dictionaries';
 
   return (
     <div className="app-minimal">
@@ -37,6 +38,12 @@ export function MainLayout({ children, currentPage, currentUser, onLogout, onMen
             className={`nav-link-btn ${isCreateReportActive ? 'active' : ''}`}
           >
             ✨ Создать отчёт
+          </button>
+          <button
+            onClick={() => onMenuClick('dictionaries')}
+            className={`nav-link-btn ${isDictionariesActive ? 'active' : ''}`}
+          >
+            📚 Справочники
           </button>
         </nav>
 
