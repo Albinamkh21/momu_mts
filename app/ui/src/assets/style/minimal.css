@@ -815,3 +815,18 @@ select[multiple] option:checked {
   margin: 0.5rem 0;
   font-size: 0.85rem;
 }
+
+/* ─── Report history tab ─────────────────────────────────────────────────── */
+
+.report-history-table th {
+  white-space: nowrap;
+  user-select: none;
+}
+
+.report-history-row--selected {
+  background: #eff6ff;
+}
+
+.sort-arrow {
+  color: var(--active-color, #3b82f6);
+}

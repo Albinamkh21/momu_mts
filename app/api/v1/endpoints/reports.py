@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Query, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional as TypingOptional
@@ -7,13 +7,16 @@ import os
 from uuid import uuid4
 from celery import chain
 from sqlalchemy import text
-from core.database import sync_engine
+from sqlalchemy.orm import Session
+from core.database import sync_engine, SessionLocal
 from tasks.report_tasks import (
     process_report_file,
     insert_data_into_final_report_table, group_report_data, find_lost_track,
     process_full_report_pipeline, normalize_person_data, normalize_staging_report_agg, normalize_data,
     export_report_to_excel, create_report_task, calculate_and_save_distribution_sql, export_report_distribution_to_excel
 )
+from __schemas.reports import ReportHistoryItem, ReportDeleteRequest
+from services.report_history_service import ReportHistoryService
 
 router = APIRouter()
 STORAGE_DIR = "/app/storage"
@@ -26,6 +29,61 @@ class ReportDataRequest(BaseModel):
     year: int
 
 
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# ─── История отчётов (report history tab) ────────────────────────────────────
+# Controller (этот роутер) -> ReportHistoryService -> ReportRepository
+
+@router.get("/report", response_model=List[ReportHistoryItem])
+async def get_report_history(
+    partner_id: TypingOptional[int] = Query(None),
+    right_category_id: TypingOptional[int] = Query(None),
+    right_usage_type_id: TypingOptional[int] = Query(None),
+    year_from: TypingOptional[int] = Query(None),
+    year_to: TypingOptional[int] = Query(None),
+    month_from: TypingOptional[int] = Query(None, ge=1, le=12),
+    month_to: TypingOptional[int] = Query(None, ge=1, le=12),
+    sort_by: str = Query("created_at"),
+    sort_dir: str = Query("desc"),
+    limit: int = Query(50, le=500),
+    offset: int = Query(0, ge=0),
+    response: Response = None,
+    db: Session = Depends(get_db),
+):
+    """Список отчётов из таблицы report (с фильтрами по партнёру/категории/типу/периоду и сортировкой)."""
+    service = ReportHistoryService(db)
+    items, total = service.list_reports(
+        partner_id=partner_id,
+        right_category_id=right_category_id,
+        right_usage_type_id=right_usage_type_id,
+        year_from=year_from,
+        year_to=year_to,
+        month_from=month_from,
+        month_to=month_to,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        limit=limit,
+        offset=offset,
+    )
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
+    return items
+
+
+@router.delete("/report")
+async def delete_report_history(body: ReportDeleteRequest, db: Session = Depends(get_db)):
+    """Удаление одного или нескольких отчётов по id."""
+    try:
+        deleted = ReportHistoryService(db).delete_reports(body.ids)
+        return {"deleted": deleted}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/partners")

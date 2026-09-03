@@ -1,0 +1,12 @@
+/* Полноширинная раскладка вкладки "История отчётов", аналогично features/tracks. */
+
+.report-history-page {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.report-history-page .page-title {
+  margin: 0;
+}

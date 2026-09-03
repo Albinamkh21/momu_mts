@@ -8,6 +8,7 @@ export function MainLayout({ children, currentPage, currentDictKey, currentUser,
   const isCatalogActive = currentPage === 'catalog';
   const isReportActive = currentPage === 'report';
   const isCreateReportActive = currentPage === 'createReport';
+  const isReportHistoryActive = currentPage === 'reportHistory';
   const isDictionariesActive = currentPage === 'dictionaries';
   const [dictMenuOpen, setDictMenuOpen] = useState(isDictionariesActive);
 
@@ -40,6 +41,12 @@ export function MainLayout({ children, currentPage, currentDictKey, currentUser,
             className={`nav-link-btn ${isCreateReportActive ? 'active' : ''}`}
           >
             ✨ Создать отчёт
+          </button>
+          <button
+            onClick={() => onMenuClick('reportHistory')}
+            className={`nav-link-btn ${isReportHistoryActive ? 'active' : ''}`}
+          >
+            🕘 История отчётов
           </button>
           <button
             onClick={() => setDictMenuOpen((open) => !open)}

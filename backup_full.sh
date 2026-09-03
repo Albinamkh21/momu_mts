@@ -1,10 +1,8 @@
 #!/bin/bash
-
 # ============================================
 # Database backup script using pg_dump
 # Usage: ./backup.sh [backup_dir]
 # ============================================
-
 set -euo pipefail
 
 # Load .env if exists
