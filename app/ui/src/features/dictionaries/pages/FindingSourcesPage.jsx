@@ -14,6 +14,11 @@ const formFields = [
   { key: 'description', label: 'Описание', type: 'textarea' },
 ];
 
+const searchFields = [
+  { key: 'name', label: 'Название' },
+  { key: 'code', label: 'Код' },
+];
+
 export function FindingSourcesPage() {
   return (
     <DictionaryBuilder
@@ -21,6 +26,7 @@ export function FindingSourcesPage() {
       title="Справочник Источников Поиска"
       columns={columns}
       formFields={formFields}
+      searchFields={searchFields}
     />
   );
 }

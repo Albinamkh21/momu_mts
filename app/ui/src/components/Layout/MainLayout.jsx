@@ -1,13 +1,15 @@
 // src/components/Layout/MainLayout.jsx
-import React from 'react';
+import React, { useState } from 'react';
+import { DICTIONARIES } from '../../features/dictionaries/dictionariesConfig';
 
-export function MainLayout({ children, currentPage, currentUser, onLogout, onMenuClick }) {
+export function MainLayout({ children, currentPage, currentDictKey, currentUser, onLogout, onMenuClick, onDictionarySelect }) {
   // Проверяем, активен ли раздел Треков (включая детализацию)
   const isTracksActive = ['list', 'track', 'person'].includes(currentPage);
   const isCatalogActive = currentPage === 'catalog';
   const isReportActive = currentPage === 'report';
   const isCreateReportActive = currentPage === 'createReport';
   const isDictionariesActive = currentPage === 'dictionaries';
+  const [dictMenuOpen, setDictMenuOpen] = useState(isDictionariesActive);
 
   return (
     <div className="app-minimal">
@@ -40,11 +42,25 @@ export function MainLayout({ children, currentPage, currentUser, onLogout, onMen
             ✨ Создать отчёт
           </button>
           <button
-            onClick={() => onMenuClick('dictionaries')}
-            className={`nav-link-btn ${isDictionariesActive ? 'active' : ''}`}
+            onClick={() => setDictMenuOpen((open) => !open)}
+            className={`nav-link-btn nav-link-btn--parent ${isDictionariesActive ? 'active' : ''}`}
           >
             📚 Справочники
+            <span className={`nav-submenu-arrow ${dictMenuOpen ? 'nav-submenu-arrow--open' : ''}`}>▾</span>
           </button>
+          {dictMenuOpen && (
+            <div className="nav-submenu">
+              {DICTIONARIES.map((dict) => (
+                <button
+                  key={dict.key}
+                  onClick={() => onDictionarySelect(dict.key)}
+                  className={`nav-submenu-item ${isDictionariesActive && currentDictKey === dict.key ? 'active' : ''}`}
+                >
+                  {dict.label}
+                </button>
+              ))}
+            </div>
+          )}
         </nav>
 
         {/* ─── USER INFO & LOGOUT ────────────────────────────────────────── */}

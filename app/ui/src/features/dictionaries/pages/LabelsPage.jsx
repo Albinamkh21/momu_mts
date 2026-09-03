@@ -12,6 +12,11 @@ const formFields = [
   { key: 'code', label: 'Код' },
 ];
 
+const searchFields = [
+  { key: 'name', label: 'Название' },
+  { key: 'code', label: 'Код' },
+];
+
 export function LabelsPage() {
   return (
     <DictionaryBuilder
@@ -19,6 +24,7 @@ export function LabelsPage() {
       title="Справочник Лейблов"
       columns={columns}
       formFields={formFields}
+      searchFields={searchFields}
     />
   );
 }

@@ -213,6 +213,53 @@
   border-left-color: var(--active-color);
 }
 
+.nav-link-btn--parent {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.nav-submenu-arrow {
+  font-size: 12px;
+  transition: transform 0.2s ease;
+  color: #64748b;
+}
+
+.nav-submenu-arrow--open {
+  transform: rotate(180deg);
+}
+
+.nav-submenu {
+  display: flex;
+  flex-direction: column;
+  background: #16202f;
+}
+
+.nav-submenu-item {
+  background: transparent;
+  border: none;
+  border-left: 4px solid transparent;
+  color: #94a3b8;
+  padding: 10px 20px 10px 44px;
+  text-align: left;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  width: 100%;
+  font-family: inherit;
+}
+
+.nav-submenu-item:hover {
+  background: #334155;
+  color: white;
+}
+
+.nav-submenu-item.active {
+  background: #334155;
+  color: white;
+  border-left-color: var(--active-color);
+}
+
 /* --- Multiselect для лейблов --- */
 
 select[multiple] {
@@ -355,6 +402,7 @@ select[multiple] option:checked {
 }
 
 .form-input {
+  box-sizing: border-box;
   padding: 0.45rem 0.75rem;
   border: 1px solid var(--border-color);
   border-radius: 6px;
@@ -582,4 +630,188 @@ select[multiple] option:checked {
 
 .person-search-item:hover {
   background: #eff6ff;
+}
+
+/* ─── Dictionaries: page layout (unified with Tracks page) ─────────────────── */
+
+.dictionary-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.dictionary-page-title {
+  margin: 0;
+  font-size: 1.5rem;
+  color: #0f172a;
+}
+
+.dictionary-table-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.dictionary-pagination {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.dictionary-row-actions {
+  white-space: nowrap;
+}
+
+/* ─── Dictionaries: Search/Filters panel ────────────────────────────────────── */
+
+.filters-panel {
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.filters-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: #fafafa;
+  border-bottom: 1px solid #e8e8e8;
+  gap: 12px;
+}
+
+.filters-header__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.filters-header__title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #333;
+}
+
+.filters-header__status {
+  font-size: 12px;
+  color: #888;
+  margin-left: 8px;
+  font-weight: 400;
+}
+
+.filters-header__arrow {
+  font-size: 12px;
+  transition: transform 0.25s;
+  color: #888;
+}
+
+.filters-header__arrow--up {
+  transform: rotate(0deg);
+}
+
+.filters-header__arrow--down {
+  transform: rotate(180deg);
+}
+
+.filters-body {
+  max-height: 200px;
+  opacity: 1;
+  padding: 16px;
+  transition: max-height 0.3s ease, opacity 0.25s ease, padding 0.3s ease;
+}
+
+.filters-body--hidden {
+  max-height: 0;
+  opacity: 0;
+  padding: 0 16px;
+  overflow: hidden;
+}
+
+.filters-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.filter-field__label {
+  font-size: 12px;
+  color: #666;
+  font-weight: 500;
+}
+
+.filter-field__input {
+  padding: 6px 10px;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  font-size: 14px;
+  width: 200px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.filter-field__input:focus {
+  border-color: #1890ff;
+}
+
+/* ─── Dictionaries: Add/Edit modal ──────────────────────────────────────────── */
+
+.modal-panel--wide {
+  width: 600px; /* +50% от базовых 400px */
+}
+
+.dict-form-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.dict-form-row:last-of-type {
+  margin-bottom: 0;
+}
+
+.dict-form-label {
+  min-width: 160px;
+  flex-shrink: 0;
+  padding-top: 0.45rem;
+  font-weight: 500;
+  color: #475569;
+  font-size: 0.9rem;
+  text-align: left;
+}
+
+.dict-form-required {
+  color: #dc2626;
+}
+
+.dict-form-control {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.dict-form-control .form-input {
+  width: 100%;
+  max-width: 100%;
+}
+
+.dict-form-error {
+  color: #dc2626;
+  margin: 0.5rem 0;
+  font-size: 0.85rem;
 }

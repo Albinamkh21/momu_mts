@@ -1,9 +1,15 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { uploadCatalogV2, downloadCatalogWithUsage, deleteLabelData, getLabels, getRightUsageTypes } from './api/catalog.api';
+import { uploadCatalogV2, downloadCatalogWithUsage, deleteLabelData, getLabels, getRightUsageTypes, getUsers } from './api/catalog.api';
 import { useTaskLogs } from '../../hooks/useTaskLogs';
 import TaskLogsPanel from '../../components/TaskLogsPanel';
 
 export function CatalogPage() {
+  const [currentUser] = useState(() => {
+  const saved = localStorage.getItem('user');
+  return saved ? JSON.parse(saved) : null;
+});
+
+  const currentUserId = currentUser?.id;
   const [uploading, setUploading] = useState(false);
   const [downloadLoading, setDownloadLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -23,14 +29,14 @@ export function CatalogPage() {
   useEffect(() => {
     getLabels().then(setLabels).catch(() => setLabels([]));
     getRightUsageTypes().then(setUsageTypes).catch(() => setUsageTypes([]));
-    fetch('/api/v1/users').then(r => r.json()).then(setUsers).catch(() => setUsers([]));
+    getUsers().then(setUsers).catch(() => setUsers([]));
   }, []);
 
   // --- Обработчик загрузки ---
   const handleUpload = async (e) => {
     e.preventDefault();
     const file = fileInputRef.current?.files[0];
-    if (!file || !userId) {
+    if (!file || !currentUserId) {
       setMessage('Выберите файл и пользователя!');
       return;
     }
@@ -41,7 +47,7 @@ export function CatalogPage() {
     setActiveTaskId(null);        // сбрасываем старый taskId
 
     try {
-      const res = await uploadCatalogV2(file, userId);
+      const res = await uploadCatalogV2(file, currentUserId);
       if (res.task_id) {
         setActiveTaskId(res.task_id);
         setMessage('⚙️ Файл загружается, обработка в фоне. Логи появятся ниже...');

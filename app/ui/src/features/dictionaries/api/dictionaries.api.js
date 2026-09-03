@@ -3,10 +3,16 @@ import { httpClient } from '../../../api/httpClient';
 // Generic API client for the Dynamic CRUD / Generic Admin Engine.
 // Works against GET/POST/PUT/DELETE /v1/dictionaries/{endpointKey}[/id]
 
-export const getDictionaryList = async (endpointKey, { search, limit = 50, offset = 0 } = {}) => {
-  const { data } = await httpClient.get(`/v1/dictionaries/${endpointKey}`, {
-    params: { search: search || undefined, limit, offset },
-  });
+export const getDictionaryList = async (endpointKey, { search, filters, limit = 50, offset = 0 } = {}) => {
+  const params = { limit, offset };
+  if (search) params.search = search;
+  if (filters) {
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value) params[key] = value;
+    });
+  }
+  console.log(`[getDictionaryList] endpointKey=${endpointKey}, params=`, params);
+  const { data } = await httpClient.get(`/v1/dictionaries/${endpointKey}`, { params });
   return data; // { items, total, limit, offset }
 };
 

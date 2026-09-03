@@ -36,8 +36,8 @@ class AuthService:
         self.jwt_refresh_secret = os.getenv('JWT_REFRESH_SECRET', 'your-refresh-secret-key-change-in-production')
         
         # Token expiration times
-        self.access_token_expire_minutes = 15
-        self.refresh_token_expire_days = 30
+        self.access_token_expire_minutes = int(os.getenv('ACCESS_TOKEN_EXPIRE_MINUTES', 480))
+        self.refresh_token_expire_days = int(os.getenv('REFRESH_TOKEN_EXPIRE_DAYS', 30))
 
     # ─── REGISTRATION ─────────────────────────────────────────────────────────
 

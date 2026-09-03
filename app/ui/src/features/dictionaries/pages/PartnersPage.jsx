@@ -18,6 +18,11 @@ const formFields = [
   { key: 'note', label: 'Примечание', type: 'textarea' },
 ];
 
+const searchFields = [
+  { key: 'organization_name', label: 'Название' },
+  { key: 'code', label: 'Код' },
+];
+
 export function PartnersPage() {
   return (
     <DictionaryBuilder
@@ -25,6 +30,7 @@ export function PartnersPage() {
       title="Справочник Партнёров"
       columns={columns}
       formFields={formFields}
+      searchFields={searchFields}
     />
   );
 }

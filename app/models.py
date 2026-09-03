@@ -522,7 +522,8 @@ class TrackContribution(Base):
 class TrackLabel(Base):
     __tablename__ = 'track_label'
     __table_args__ = (
-        ForeignKeyConstraint(['label_id'], ['label.id'], name='track_label_label_id_fkey'),
+
+        ForeignKeyConstraint(['label_id'], ['label.id'], ondelete='RESTRICT', name='track_label_label_id_fkey'),
         ForeignKeyConstraint(['track_id'], ['track.id'], ondelete='CASCADE', name='track_label_track_id_fkey'),
         PrimaryKeyConstraint('id', name='track_label_pkey'),
         UniqueConstraint('track_id', 'label_id', name='track_label_track_id_label_id_key'),

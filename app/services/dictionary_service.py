@@ -12,7 +12,7 @@ from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from __crud.generic_repository import GenericRepository
+from __crud.generic_repository import GenericRepository, RecordInUseError
 from core.dictionary_registry import get_dictionary_config
 
 
@@ -31,8 +31,8 @@ class DictionaryService:
         self.config = config
         self.repo = GenericRepository(db, config.model, config.search_fields, config.order_by)
 
-    def list(self, search: str | None, limit: int, offset: int) -> dict:
-        items, total = self.repo.get_all(search=search, limit=limit, offset=offset)
+    def list(self, search: str | None, filters: dict[str, str] | None, limit: int, offset: int) -> dict:
+        items, total = self.repo.get_all(search=search, filters=filters, limit=limit, offset=offset)
         return {
             "items": [_to_dict(item) for item in items],
             "total": total,
@@ -69,6 +69,12 @@ class DictionaryService:
     def delete(self, item_id: int) -> None:
         try:
             deleted = self.repo.delete(item_id)
+        except RecordInUseError as e:
+            self.repo.db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Запись используется в других данных и не может быть удалена",
+            ) from e
         except IntegrityError as e:
             self.repo.db.rollback()
             raise HTTPException(

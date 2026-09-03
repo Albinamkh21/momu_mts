@@ -10,6 +10,10 @@ const formFields = [
   { key: 'name', label: 'Название', required: true },
 ];
 
+const searchFields = [
+  { key: 'name', label: 'Название' },
+];
+
 export function RightCategoriesPage() {
   return (
     <DictionaryBuilder
@@ -17,6 +21,7 @@ export function RightCategoriesPage() {
       title="Справочник Категорий Прав"
       columns={columns}
       formFields={formFields}
+      searchFields={searchFields}
     />
   );
 }

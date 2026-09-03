@@ -59,7 +59,7 @@ function App() {
   const goToCatalog = () => setPage({ type: 'catalog', prev: page });
   const goToReport = () => setPage({ type: 'report', prev: page });
   const goToCreateReport = () => setPage({ type: 'createReport', prev: page });
-  const goToDictionaries = () => setPage({ type: 'dictionaries', prev: page });
+  const goToDictionaries = (dictKey) => setPage({ type: 'dictionaries', dictKey, prev: page });
   const goToTracks = () => setPage({ type: 'list', prev: page });
   const goToForgotPassword = () => setPage({ type: 'forgotPassword' });
   const goBackToAuth = () => setPage({ type: 'auth' });
@@ -125,15 +125,16 @@ function App() {
       {currentUser && (
         <MainLayout
           currentPage={page.type}
+          currentDictKey={page.dictKey}
           currentUser={currentUser}
           onLogout={handleLogout}
           onMenuClick={(mod) => {
             if (mod === 'catalog') goToCatalog();
             else if (mod === 'report') goToReport();
             else if (mod === 'createReport') goToCreateReport();
-            else if (mod === 'dictionaries') goToDictionaries();
             else goToTracks();
           }}
+          onDictionarySelect={goToDictionaries}
         >
           {page.type === 'track' && (
             <TrackDetailPage trackId={page.id} onBack={goBack} onPersonClick={goToPerson} />
@@ -152,7 +153,7 @@ function App() {
           )}
 
           {page.type === 'dictionaries' && (
-            <DictionariesPage />
+            <DictionariesPage activeKey={page.dictKey} />
           )}
 
           {page.type === 'createReport' && (
