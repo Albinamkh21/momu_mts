@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { getPerson, updatePerson } from './api/tracks.api';
+import { ConfirmModal } from '../../components/ConfirmModal';
 import './tracks.css';
 
 export const PersonDetailPage = ({ personId, onBack, onTrackClick }) => {
@@ -8,6 +9,7 @@ export const PersonDetailPage = ({ personId, onBack, onTrackClick }) => {
   const [editName, setEditName] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveErrorOpen, setSaveErrorOpen] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -31,7 +33,7 @@ export const PersonDetailPage = ({ personId, onBack, onTrackClick }) => {
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
       console.error(err);
-      alert('Ошибка сохранения');
+      setSaveErrorOpen(true);
     } finally {
       setSaving(false);
     }
@@ -121,6 +123,15 @@ export const PersonDetailPage = ({ personId, onBack, onTrackClick }) => {
           <p className="detail-empty">Нет связанных треков</p>
         )}
       </section>
+
+      <ConfirmModal
+        open={saveErrorOpen}
+        title="Ошибка"
+        message="Ошибка сохранения"
+        confirmLabel="OK"
+        hideCancel
+        onConfirm={() => setSaveErrorOpen(false)}
+      />
     </div>
   );
 };

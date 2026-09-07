@@ -10,7 +10,9 @@ export function MainLayout({ children, currentPage, currentDictKey, currentUser,
   const isCreateReportActive = currentPage === 'createReport';
   const isReportHistoryActive = currentPage === 'reportHistory';
   const isDictionariesActive = currentPage === 'dictionaries';
+  const isReportsActive = isReportActive || isCreateReportActive || isReportHistoryActive;
   const [dictMenuOpen, setDictMenuOpen] = useState(isDictionariesActive);
+  const [reportsMenuOpen, setReportsMenuOpen] = useState(isReportsActive);
 
   return (
     <div className="app-minimal">
@@ -31,23 +33,34 @@ export function MainLayout({ children, currentPage, currentDictKey, currentUser,
             📂 Каталог
           </button>
           <button
-            onClick={() => onMenuClick('report')}
-            className={`nav-link-btn ${isReportActive ? 'active' : ''}`}
+            onClick={() => setReportsMenuOpen((open) => !open)}
+            className={`nav-link-btn nav-link-btn--parent ${isReportsActive ? 'active' : ''}`}
           >
             📑 Отчёты
+            <span className={`nav-submenu-arrow ${reportsMenuOpen ? 'nav-submenu-arrow--open' : ''}`}>▾</span>
           </button>
-          <button
-            onClick={() => onMenuClick('createReport')}
-            className={`nav-link-btn ${isCreateReportActive ? 'active' : ''}`}
-          >
-            ✨ Создать отчёт
-          </button>
-          <button
-            onClick={() => onMenuClick('reportHistory')}
-            className={`nav-link-btn ${isReportHistoryActive ? 'active' : ''}`}
-          >
-            🕘 История отчётов
-          </button>
+          {reportsMenuOpen && (
+            <div className="nav-submenu">
+              <button
+                onClick={() => onMenuClick('report')}
+                className={`nav-submenu-item ${isReportActive ? 'active' : ''}`}
+              >
+                Загрузить отчёт
+              </button>
+              <button
+                onClick={() => onMenuClick('createReport')}
+                className={`nav-submenu-item ${isCreateReportActive ? 'active' : ''}`}
+              >
+                Создать отчёт
+              </button>
+              <button
+                onClick={() => onMenuClick('reportHistory')}
+                className={`nav-submenu-item ${isReportHistoryActive ? 'active' : ''}`}
+              >
+                Архив отчётов
+              </button>
+            </div>
+          )}
           <button
             onClick={() => setDictMenuOpen((open) => !open)}
             className={`nav-link-btn nav-link-btn--parent ${isDictionariesActive ? 'active' : ''}`}

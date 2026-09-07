@@ -1,11 +1,13 @@
-import React, { useMemo, useCallback, useEffect, useRef } from 'react';
+import React, { useMemo, useCallback, useEffect, useRef, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import { PersonsRenderer } from './renderers/PersonsRenderer';
+import { ConfirmModal } from '../../../components/ConfirmModal';
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-alpine.css';
 
 export const TrackGrid = ({ fetchTracks, filters, onPersonClick, onTrackClick, onEditTrack, onDeleteTrack, searchTrigger }) => {
   const gridApiRef = useRef(null);
+  const [trackToDelete, setTrackToDelete] = useState(null);
   
   // Ref для хранения фильтров, которые будут отправлены на сервер при запросе
   // Мы синхронизируем его с пропсами, но не используем как зависимость для запроса
@@ -66,11 +68,7 @@ export const TrackGrid = ({ fetchTracks, filters, onPersonClick, onTrackClick, o
             <button
               type="button"
               className="btn-sm btn-danger"
-              onClick={() => {
-                if (window.confirm(`Удалить трек "${params.data.title}"? Также будут удалены его права, участники и связи с релизом/лейблом (авторы и правообладатели удаляются, только если не используются другими треками).`)) {
-                  onDeleteTrack && onDeleteTrack(params.data.id);
-                }
-              }}
+              onClick={() => setTrackToDelete(params.data)}
               title="Удалить трек"
               style={{ marginLeft: '0.25rem' }}
             >
@@ -121,6 +119,19 @@ export const TrackGrid = ({ fetchTracks, filters, onPersonClick, onTrackClick, o
         cacheBlockSize={100}
         onGridReady={onGridReady}
         maxConcurrentDatasourceRequests={1}
+      />
+
+      <ConfirmModal
+        open={!!trackToDelete}
+        title="Подтверждение удаления"
+        message={trackToDelete ? `Удалить трек "${trackToDelete.title}"? Также будут удалены его права, участники и связи с релизом/лейблом (авторы и правообладатели удаляются, только если не используются другими треками).` : ''}
+        confirmLabel="Удалить"
+        danger
+        onConfirm={() => {
+          onDeleteTrack && onDeleteTrack(trackToDelete.id);
+          setTrackToDelete(null);
+        }}
+        onCancel={() => setTrackToDelete(null)}
       />
     </div>
   );

@@ -6,7 +6,7 @@ from typing import Any, Optional
 from sqlalchemy import asc, desc
 from sqlalchemy.orm import Session
 
-from models import Partners, Report, RightCategory, RightUsageType
+from models import Partners, Report, RightCategory, RightUsageType, StagingReportAgg, ReportTrackRightsCache, ReportTrackRightsDistribution
 
 # Whitelist of columns that can be sorted on (protects against SQL injection via sort_by).
 SORTABLE_FIELDS: dict[str, Any] = {
@@ -76,10 +76,38 @@ class ReportRepository:
     def delete_many(self, ids: list[int]) -> int:
         if not ids:
             return 0
+
+        # 1. Запоминаем upload_id перед тем, как удалять отчеты
+        upload_ids = (
+            self.db.query(Report.upload_id)
+            .filter(Report.id.in_(ids), Report.upload_id.isnot(None))
+            .distinct()
+            .all()
+        )
+        upload_ids = [u[0] for u in upload_ids if u[0]]
+
+        # 2. ЯВНО удаляем кэш (раз каскад в БД не сработал)
+        self.db.query(ReportTrackRightsCache).filter(
+            ReportTrackRightsCache.report_id.in_(ids)
+        ).delete(synchronize_session=False)
+
+        # 3. ЯВНО удаляем распределение (это снимет блокировку с сырых данных staging)
+        self.db.query(ReportTrackRightsDistribution).filter(
+            ReportTrackRightsDistribution.report_id.in_(ids)
+        ).delete(synchronize_session=False)
+
+        # 4. Теперь сырые данные (staging) никем не заблокированы, удаляем их
+        if upload_ids:
+            self.db.query(StagingReportAgg).filter(
+                StagingReportAgg.upload_id.in_(upload_ids)
+            ).delete(synchronize_session=False)
+
+        # 5. Наконец, удаляем сами отчеты
         deleted = (
             self.db.query(Report)
             .filter(Report.id.in_(ids))
             .delete(synchronize_session=False)
         )
+        
         self.db.commit()
         return deleted

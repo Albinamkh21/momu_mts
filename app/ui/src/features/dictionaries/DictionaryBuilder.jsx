@@ -5,6 +5,7 @@ import {
   updateDictionaryItem,
   deleteDictionaryItem,
 } from './api/dictionaries.api';
+import { ConfirmModal } from '../../components/ConfirmModal';
 
 const PAGE_SIZE = 50;
 const SEARCH_DEBOUNCE_MS = 350;
@@ -38,6 +39,7 @@ export function DictionaryBuilder({ endpointKey, title, columns, formFields, sea
   const [formValues, setFormValues] = useState({});
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
   const fetchList = useCallback(async (currentFilters, currentOffset) => {
     const requestId = ++requestIdRef.current;
@@ -137,8 +139,14 @@ export function DictionaryBuilder({ endpointKey, title, columns, formFields, sea
     }
   };
 
-  const handleDelete = async (item) => {
-    if (!window.confirm('Удалить эту запись?')) return;
+  const handleDelete = (item) => {
+    setDeleteTarget(item);
+  };
+
+  const confirmDelete = async () => {
+    const item = deleteTarget;
+    setDeleteTarget(null);
+    if (!item) return;
     try {
       await deleteDictionaryItem(endpointKey, item.id);
       await fetchList(filters, offset);
@@ -306,6 +314,16 @@ export function DictionaryBuilder({ endpointKey, title, columns, formFields, sea
           </div>
         </div>
       )}
+
+      <ConfirmModal
+        open={!!deleteTarget}
+        title="Подтверждение удаления"
+        message="Удалить эту запись?"
+        confirmLabel="Удалить"
+        danger
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }

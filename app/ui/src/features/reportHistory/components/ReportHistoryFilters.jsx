@@ -107,11 +107,11 @@ export const ReportHistoryFilters = ({ filters, onChange, onSearch, onClear, loa
 
           <button
             type="button"
-            className="btn-secondary"
+            className={`btn-search ${loading ? 'btn-search--loading' : ''}`}
             onClick={onClear}
             disabled={loading}
           >
-            Очистить
+            Очистить фильтр
           </button>
         </div>
       </div>

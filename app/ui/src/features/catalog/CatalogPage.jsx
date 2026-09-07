@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { uploadCatalogV2, downloadCatalogWithUsage, deleteLabelData, getLabels, getRightUsageTypes, getUsers } from './api/catalog.api';
 import { useTaskLogs } from '../../hooks/useTaskLogs';
 import TaskLogsPanel from '../../components/TaskLogsPanel';
+import { ConfirmModal } from '../../components/ConfirmModal';
 
 export function CatalogPage() {
   const [currentUser] = useState(() => {
@@ -23,6 +24,7 @@ export function CatalogPage() {
   const [message, setMessage] = useState('');
   const fileInputRef = useRef();
   const [activeTaskId, setActiveTaskId] = useState(null);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 
   const { logs, setLogs } = useTaskLogs(activeTaskId);
 
@@ -90,12 +92,15 @@ export function CatalogPage() {
   };
 
   // --- Обработчик удаления ---
-  const handleDelete = async (e) => {
+  const handleDelete = (e) => {
     e.preventDefault();
     console.log('Запуск удаления для labelId:', labelId);
     if (!labelId) return;
-    if (!window.confirm('Вы уверены, что хотите удалить ВСЕ данные по этому лейблу?')) return;
+    setConfirmDeleteOpen(true);
+  };
 
+  const performDelete = async () => {
+    setConfirmDeleteOpen(false);
     setDeleteLoading(true);
     setMessage('⏳ Запуск удаления...');
     setLogs([]);
@@ -230,6 +235,16 @@ export function CatalogPage() {
           setDeleteLoading(false);
           setLogs([]);
         }}
+      />
+
+      <ConfirmModal
+        open={confirmDeleteOpen}
+        title="Подтверждение удаления"
+        message="Вы уверены, что хотите удалить ВСЕ данные по этому лейблу?"
+        confirmLabel="Удалить"
+        danger
+        onConfirm={performDelete}
+        onCancel={() => setConfirmDeleteOpen(false)}
       />
     </div>
   );

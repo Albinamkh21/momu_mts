@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ReportHistoryFilters } from './components/ReportHistoryFilters';
 import { ReportHistoryTable } from './components/ReportHistoryTable';
+import { ConfirmModal } from '../../components/ConfirmModal';
 import {
   getReportHistory,
   deleteReportHistory,
@@ -60,6 +61,7 @@ export function ReportHistoryPage() {
 
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [deleting, setDeleting] = useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -137,10 +139,13 @@ export function ReportHistoryPage() {
     setSelectedIds(checked ? new Set(items.map((it) => it.id)) : new Set());
   };
 
-  const handleDeleteSelected = async () => {
+  const handleDeleteSelected = () => {
     if (selectedIds.size === 0) return;
-    if (!window.confirm(`Удалить выбранные отчёты (${selectedIds.size})?`)) return;
+    setConfirmDeleteOpen(true);
+  };
 
+  const performDeleteSelected = async () => {
+    setConfirmDeleteOpen(false);
     setDeleting(true);
     setError('');
     try {
@@ -209,6 +214,16 @@ export function ReportHistoryPage() {
           </button>
         </div>
       </div>
+
+      <ConfirmModal
+        open={confirmDeleteOpen}
+        title="Подтверждение удаления"
+        message={`Удалить выбранные отчёты (${selectedIds.size})?`}
+        confirmLabel="Удалить"
+        danger
+        onConfirm={performDeleteSelected}
+        onCancel={() => setConfirmDeleteOpen(false)}
+      />
     </div>
   );
 }

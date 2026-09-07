@@ -6,9 +6,7 @@ const COLUMNS = [
   { key: 'right_usage_type_name', label: 'Тип использования' },
   { key: 'report_month', label: 'Месяц' },
   { key: 'report_year', label: 'Год' },
-  { key: 'play_count', label: 'Прослушивания' },
   { key: 'payout_amount', label: 'Сумма выплаты' },
-  { key: 'price_per_play', label: 'Цена за прослушивание' },
   { key: 'created_at', label: 'Создан' },
 ];
 
@@ -16,6 +14,15 @@ const formatDate = (value) => {
   if (!value) return '';
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? value : d.toLocaleString('ru-RU');
+};
+const formatMoney = (value) => {
+  if (value === null || value === undefined) return '';
+  const num = Number(value);
+  if (Number.isNaN(num)) return value;
+  return new Intl.NumberFormat('ru-RU', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(num);
 };
 
 /**
@@ -78,9 +85,9 @@ export const ReportHistoryTable = ({ items, loading, sortBy, sortDir, onSortChan
             <td>{item.right_usage_type_name}</td>
             <td>{item.report_month}</td>
             <td>{item.report_year}</td>
-            <td>{item.play_count ?? ''}</td>
-            <td>{item.payout_amount ?? ''}</td>
-            <td>{item.price_per_play ?? ''}</td>
+           <td style={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}>
+            {formatMoney(item.payout_amount)}
+          </td>
             <td>{formatDate(item.created_at)}</td>
           </tr>
         ))}
