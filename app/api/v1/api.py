@@ -8,6 +8,8 @@ from api.v1.endpoints.reports import router as report_router
 from api.v1.endpoints.users import router as users_router
 from api.v1.endpoints.auth import router as auth_router
 from api.v1.endpoints.dictionaries import router as dictionaries_router
+from api.v1.endpoints.rights_holders import router as rights_holders_router
+from api.v1.endpoints.contracts import router as contracts_router
 
 api_router = APIRouter()
 api_router.include_router(auth_router, prefix="/auth", tags=["Auth"])
@@ -16,6 +18,19 @@ api_router.include_router(
     dictionaries_router,
     prefix="/dictionaries",
     tags=["Dictionaries"],
+    dependencies=[Depends(get_current_user)],
+)
+
+api_router.include_router(
+    rights_holders_router,
+    prefix="/rights-holders",
+    tags=["Rights Holders"],
+    dependencies=[Depends(get_current_user)],
+)
+api_router.include_router(
+    contracts_router,
+    prefix="/contracts",
+    tags=["Contracts"],
     dependencies=[Depends(get_current_user)],
 )
 

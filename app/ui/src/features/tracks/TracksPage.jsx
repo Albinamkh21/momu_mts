@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useTracks } from './hooks/useTracks';
 import { TrackGrid } from './components/TrackGrid';
-import { FiltersPanel } from './components/FiltersPanel';
+import { CrudPageLayout } from '../../components/shared/CrudPageLayout';
+import { getTrackFilterFields } from './components/trackFilterFields';
 import { TrackWizardPage } from './editor/TrackWizardPage';
 import { deleteTrack } from './api/tracks.api';
 import './tracks.css';
@@ -20,10 +21,14 @@ const getInitialFilters = () => {
   return { title: '', isrc: '', label_own_code: '', label_id: '', artist_name: '', author_name: '' };
 };
 
-export const TracksPage = ({ onTrackClick }) => {
+export const TracksPage = ({ onTrackClick, isComingFromDetail = false }) => {
   const { loading, labels, fetchTracksData } = useTracks();
   const [selectedPerson, setSelectedPerson] = useState(null);
-  const [filters, setFilters] = useState(getInitialFilters);
+  // Se vindo do menu (isComingFromDetail=false), inicia com filtros vazios
+  // Se voltando de um detalhe (isComingFromDetail=true), carrega filtros salvos
+  const [filters, setFilters] = useState(() => 
+    isComingFromDetail ? getInitialFilters() : { title: '', isrc: '', label_own_code: '', label_id: '', artist_name: '', author_name: '' }
+  );
   const [searchTrigger, setSearchTrigger] = useState(0);
   // null = closed, { trackId: null } = creating a new track, { trackId } = editing
   const [editorState, setEditorState] = useState(null);
@@ -39,7 +44,6 @@ export const TracksPage = ({ onTrackClick }) => {
 
   const handleFiltersChange = (newFilters) => {
     setFilters(newFilters);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(newFilters));
   };
 
   const openNewTrackEditor = () => setEditorState({ trackId: null });
@@ -63,17 +67,15 @@ export const TracksPage = ({ onTrackClick }) => {
   };
 
   return (
-    <div className="tracks-page">
-      <FiltersPanel
-        filters={filters}
-        onChange={handleFiltersChange}
-        onSearch={handleSearch}
-        loading={loading}
-        labels={labels}
-        onAddTrack={openNewTrackEditor}
-      />
-
-      {editorState && (
+    <CrudPageLayout
+      className="tracks-page"
+      filterFields={getTrackFilterFields(labels)}
+      filters={filters}
+      onFiltersChange={handleFiltersChange}
+      onSearch={handleSearch}
+      loading={loading}
+      addButton={{ label: 'Новый трек', onClick: openNewTrackEditor }}
+      editorSlot={editorState && (
         <div className="track-editor-inline">
           <TrackWizardPage
             trackId={editorState.trackId}
@@ -82,34 +84,8 @@ export const TracksPage = ({ onTrackClick }) => {
           />
         </div>
       )}
-
-      <div className="grid-wrapper">
-        {/* Анимация загрузки сохранена */}
-        {loading && (
-          <div className="loading-overlay">
-            <div className="loading-spinner" />
-            <span className="loading-text">Загружаем треки...</span>
-          </div>
-        )}
-
-        {deleteError && (
-          <div className="wizard-error">{deleteError}</div>
-        )}
-        
-        {/* Грид теперь работает в режиме Infinite */}
-        <TrackGrid 
-          fetchTracks={fetchTracksData} 
-          filters={filters}
-          searchTrigger={searchTrigger}
-          onPersonClick={setSelectedPerson} 
-          onTrackClick={onTrackClick} 
-          onEditTrack={openEditTrackEditor}
-          onDeleteTrack={handleDeleteTrack}
-        />
-      </div>
-
-      {/* Сайдбар Person сохранен полностью */}
-      {selectedPerson && (
+      error={deleteError}
+      sidebar={selectedPerson && (
         <div className="person-sidebar">
           <h3>{selectedPerson.name}</h3>
           <p>Роль: {selectedPerson.role}</p>
@@ -117,6 +93,16 @@ export const TracksPage = ({ onTrackClick }) => {
           <button onClick={() => setSelectedPerson(null)}>Закрыть</button>
         </div>
       )}
-    </div>
+    >
+      <TrackGrid
+        fetchTracks={fetchTracksData}
+        filters={filters}
+        searchTrigger={searchTrigger}
+        onPersonClick={setSelectedPerson}
+        onTrackClick={onTrackClick}
+        onEditTrack={openEditTrackEditor}
+        onDeleteTrack={handleDeleteTrack}
+      />
+    </CrudPageLayout>
   );
 };

@@ -9,13 +9,17 @@ export const useTracks = () => {
     getLabels().then(setLabels).catch(console.error);
   }, []);
 
-  const fetchTracksData = useCallback(async (filters, limit, offset) => {
+  const fetchTracksData = useCallback(async (filters, limit, offset, sortModel) => {
     setLoading(true);
     try {
       const params = { limit, offset };
       Object.keys(filters).forEach(key => {
         if (filters[key] !== '') params[key] = filters[key];
       });
+      if (sortModel && sortModel.length > 0) {
+        params.sort_by = sortModel[0].colId;
+        params.sort_dir = sortModel[0].sort;
+      }
 
       // Теперь здесь полный объект ответа Axios
       const response = await getTracks(params); 

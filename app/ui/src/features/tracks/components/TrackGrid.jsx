@@ -1,138 +1,24 @@
-import React, { useMemo, useCallback, useEffect, useRef, useState } from 'react';
-import { AgGridReact } from 'ag-grid-react';
-import { PersonsRenderer } from './renderers/PersonsRenderer';
-import { ConfirmModal } from '../../../components/ConfirmModal';
-import 'ag-grid-community/styles/ag-grid.css';
-import 'ag-grid-community/styles/ag-theme-alpine.css';
+import React, { useMemo } from 'react';
+import { DataGrid } from '../../../components/shared/DataGrid';
+import { getTrackColumns } from './trackColumns';
 
 export const TrackGrid = ({ fetchTracks, filters, onPersonClick, onTrackClick, onEditTrack, onDeleteTrack, searchTrigger }) => {
-  const gridApiRef = useRef(null);
-  const [trackToDelete, setTrackToDelete] = useState(null);
-  
-  // Ref для хранения фильтров, которые будут отправлены на сервер при запросе
-  // Мы синхронизируем его с пропсами, но не используем как зависимость для запроса
-  const lastFiltersRef = useRef(filters);
-  useEffect(() => {
-    lastFiltersRef.current = filters;
-  }, [filters]);
-
-  const columnDefs = useMemo(() => [
-    { field: 'id', headerName: 'ID', width: 90 },
-    { field: 'isrc', headerName: 'ISRC', width: 140 },
-    { 
-      field: 'title', 
-      headerName: 'Название', 
-      flex: 2, 
-      cellRenderer: (params) => {
-        if (!params.data) return <span style={{ color: '#aaa' }}>Загрузка...</span>;
-        return (
-          <span
-            className="track-title-link"
-            onClick={() => onTrackClick && onTrackClick(params.data.id)}
-          >
-            {params.value}
-          </span>
-        );
-      },
-    },
-    { field: 'label_own_code', headerName: 'Код лейбла', width: 120 },
-    { 
-      field: 'persons', 
-      headerName: 'Авторы / Исполнители', 
-      flex: 3,
-      cellRenderer: PersonsRenderer,
-      cellRendererParams: { onPersonClick }
-    },
-    { 
-      field: 'labels', 
-      headerName: 'Лейблы', 
-      valueFormatter: p => p.value?.map(l => l.name).join(', ') 
-    },
-    {
-      headerName: '',
-      width: 200,
-      sortable: false,
-      filter: false,
-      cellRenderer: (params) => {
-        if (!params.data) return null;
-        return (
-          <>
-            <button
-              type="button"
-              className="btn-sm"
-              onClick={() => onEditTrack && onEditTrack(params.data.id)}
-              title="Редактировать трек"
-            >
-              ✎ Редактировать
-            </button>
-            <button
-              type="button"
-              className="btn-sm btn-danger"
-              onClick={() => setTrackToDelete(params.data)}
-              title="Удалить трек"
-              style={{ marginLeft: '0.25rem' }}
-            >
-              🗑
-            </button>
-          </>
-        );
-      },
-    }
-  ], [onPersonClick, onTrackClick, onEditTrack, onDeleteTrack]);
-
-  // Функция настройки источника данных
-  const setupDatasource = useCallback((gridApi) => {
-    const dataSource = {
-      getRows: async (rowParams) => {
-        const limit = rowParams.endRow - rowParams.startRow;
-        const offset = rowParams.startRow;
-
-        // Вызываем загрузку, передавая текущие значения из Ref
-        const result = await fetchTracks(lastFiltersRef.current, limit, offset);
-        rowParams.successCallback(result.items, result.total);
-      }
-    };
-    // Используем актуальный метод API
-    gridApi.setGridOption('datasource', dataSource);
-  }, [fetchTracks]); // Исключаем filters, чтобы ввод текста не вызывал пересоздание
-
-  const onGridReady = (params) => {
-    gridApiRef.current = params.api;
-    setupDatasource(params.api);
-  };
-
-  // Этот эффект запускается ПРИ МОНТИРОВАНИИ и ПРИ НАЖАТИИ кнопки "Найти"
-  useEffect(() => {
-    if (gridApiRef.current) {
-      gridApiRef.current.paginationGoToFirstPage();
-      setupDatasource(gridApiRef.current);
-    }
-  }, [searchTrigger, setupDatasource]);
+  const columnDefs = useMemo(
+    () => getTrackColumns({ onPersonClick, onTrackClick, onEditTrack }),
+    [onPersonClick, onTrackClick, onEditTrack]
+  );
 
   return (
-    <div className="ag-theme-alpine" style={{ height: '100%', width: '100%' }}>
-      <AgGridReact
-        columnDefs={columnDefs}
-        rowModelType="infinite"
-        pagination={true}
-        paginationPageSize={100}
-        cacheBlockSize={100}
-        onGridReady={onGridReady}
-        maxConcurrentDatasourceRequests={1}
-      />
-
-      <ConfirmModal
-        open={!!trackToDelete}
-        title="Подтверждение удаления"
-        message={trackToDelete ? `Удалить трек "${trackToDelete.title}"? Также будут удалены его права, участники и связи с релизом/лейблом (авторы и правообладатели удаляются, только если не используются другими треками).` : ''}
-        confirmLabel="Удалить"
-        danger
-        onConfirm={() => {
-          onDeleteTrack && onDeleteTrack(trackToDelete.id);
-          setTrackToDelete(null);
-        }}
-        onCancel={() => setTrackToDelete(null)}
-      />
-    </div>
+    <DataGrid
+      columnDefs={columnDefs}
+      fetchRows={fetchTracks}
+      filters={filters}
+      searchTrigger={searchTrigger}
+      deleteConfirm={{
+        getMessage: (row) =>
+          `Удалить трек "${row.title}"? Также будут удалены его права, участники и связи с релизом/лейблом (авторы и правообладатели удаляются, только если не используются другими треками).`,
+        onConfirm: (row) => onDeleteTrack && onDeleteTrack(row.id),
+      }}
+    />
   );
 };

@@ -480,6 +480,7 @@ class Release(Base):
 class RightHolder(Base):
     __tablename__ = 'right_holder'
     __table_args__ = (
+        CheckConstraint("type IN ('INDIVIDUAL', 'COMPANY', 'IP')", name='right_holder_type_check'),
         ForeignKeyConstraint(['label_id'], ['label.id'], name='right_holder_label_id_fkey'),
         PrimaryKeyConstraint('id', name='right_holder_pkey'),
         UniqueConstraint('name', name='right_holder_name_key'),
@@ -491,6 +492,33 @@ class RightHolder(Base):
     label_id: Mapped[Optional[int]] = mapped_column(Integer)
     effective_date: Mapped[Optional[datetime.date]] = mapped_column(Date)
     termination_date: Mapped[Optional[datetime.date]] = mapped_column(Date)
+
+    # --- Расширение: юридические/финансовые данные правообладателя ---
+    type: Mapped[Optional[str]] = mapped_column(String(20))
+    alias: Mapped[Optional[str]] = mapped_column(String(255))
+    email: Mapped[Optional[str]] = mapped_column(String(255))
+    phone: Mapped[Optional[str]] = mapped_column(String(50))
+    address: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Идентификация (физлицо/ИП)
+    full_name: Mapped[Optional[str]] = mapped_column(String(255))
+    id_document_type: Mapped[Optional[str]] = mapped_column(String(50))
+    id_document_number: Mapped[Optional[str]] = mapped_column(String(50))
+    id_document_issued_by: Mapped[Optional[str]] = mapped_column(String(255))
+    id_document_issue_date: Mapped[Optional[datetime.date]] = mapped_column(Date)
+
+    # Идентификация (юрлицо)
+    company_name: Mapped[Optional[str]] = mapped_column(String(255))
+    director_name: Mapped[Optional[str]] = mapped_column(String(255))
+    acting_basis: Mapped[Optional[str]] = mapped_column(String(255))
+
+    # Общее для юрлица/ИП
+    iin_bin: Mapped[Optional[str]] = mapped_column(String(20))
+
+    # Банковские данные
+    iban: Mapped[Optional[str]] = mapped_column(String(34))
+    bank_name: Mapped[Optional[str]] = mapped_column(String(255))
+    bik: Mapped[Optional[str]] = mapped_column(String(20))
 
     label: Mapped[Optional['Label']] = relationship('Label', back_populates='right_holder')
     contract: Mapped[list['Contract']] = relationship('Contract', back_populates='right_holder')
@@ -541,18 +569,23 @@ class TrackLabel(Base):
 class Contract(Base):
     __tablename__ = 'contract'
     __table_args__ = (
+        CheckConstraint("status IN ('DRAFT', 'ACTIVE', 'TERMINATED')", name='contract_status_check'),
+        CheckConstraint("direction_type IN ('DIRECT_ARTIST', 'LABEL_CATALOG')", name='contract_direction_type_check'),
         ForeignKeyConstraint(['right_holder_id'], ['right_holder.id'], name='contract_right_holder_id_fkey'),
         PrimaryKeyConstraint('id', name='contract_pkey'),
-        UniqueConstraint('treaty_number', name='contract_treaty_number_key')
+        UniqueConstraint('contract_number', name='contract_contract_number_key')
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    treaty_number: Mapped[str] = mapped_column(String(255), nullable=False)
-    right_holder_id: Mapped[Optional[int]] = mapped_column(Integer)
-    effective_date: Mapped[Optional[datetime.date]] = mapped_column(Date)
-    termination_date: Mapped[Optional[datetime.date]] = mapped_column(Date)
+    contract_number: Mapped[str] = mapped_column(String(255), nullable=False)
+    right_holder_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    signed_date: Mapped[Optional[datetime.date]] = mapped_column(Date)
+    valid_from: Mapped[Optional[datetime.date]] = mapped_column(Date)
+    valid_to: Mapped[Optional[datetime.date]] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'DRAFT'"))
+    direction_type: Mapped[Optional[str]] = mapped_column(String(20))
 
-    right_holder: Mapped[Optional['RightHolder']] = relationship('RightHolder', back_populates='contract')
+    right_holder: Mapped['RightHolder'] = relationship('RightHolder', back_populates='contract')
     track_right: Mapped[list['TrackRight']] = relationship('TrackRight', back_populates='contract')
 
 

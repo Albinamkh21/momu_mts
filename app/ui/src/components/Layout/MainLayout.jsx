@@ -6,6 +6,8 @@ export function MainLayout({ children, currentPage, currentDictKey, currentUser,
   // Проверяем, активен ли раздел Треков (включая детализацию)
   const isTracksActive = ['list', 'track', 'person'].includes(currentPage);
   const isCatalogActive = currentPage === 'catalog';
+  const isRightHoldersActive = currentPage === 'rightHolders';
+  const isContractsActive = currentPage === 'contracts';
   const isReportActive = currentPage === 'report';
   const isCreateReportActive = currentPage === 'createReport';
   const isReportHistoryActive = currentPage === 'reportHistory';
@@ -31,6 +33,18 @@ export function MainLayout({ children, currentPage, currentDictKey, currentUser,
             className={`nav-link-btn ${isCatalogActive ? 'active' : ''}`}
           >
             📂 Каталог
+          </button>
+          <button
+            onClick={() => onMenuClick('rightHolders')}
+            className={`nav-link-btn ${isRightHoldersActive ? 'active' : ''}`}
+          >
+            👤 Правообладатели
+          </button>
+          <button
+            onClick={() => onMenuClick('contracts')}
+            className={`nav-link-btn ${isContractsActive ? 'active' : ''}`}
+          >
+            📝 Договоры
           </button>
           <button
             onClick={() => setReportsMenuOpen((open) => !open)}

@@ -4,6 +4,8 @@ import { MainLayout } from './components/Layout/MainLayout';
 import { TracksPage } from './features/tracks/TracksPage';
 import { TrackDetailPage } from './features/tracks/TrackDetailPage';
 import { PersonDetailPage } from './features/tracks/PersonDetailPage';
+import { RightHoldersPage } from './features/rightHolders/RightHoldersPage';
+import { ContractPage } from './features/contracts/ContractPage';
 import { CatalogPage } from './features/catalog/CatalogPage';
 import { ReportPage } from './features/report/ReportPage';
 import { CreateReportPage } from './features/report/CreateReportPage';
@@ -58,6 +60,9 @@ function App() {
   const goToTrack = (id) => setPage({ type: 'track', id });
   const goToPerson = (id) => setPage({ type: 'person', id, prev: page });
   const goToCatalog = () => setPage({ type: 'catalog', prev: page });
+  const goToRightHolders = () => setPage({ type: 'rightHolders', prev: page });
+  const goToRightHolderView = (rightHolderId) => setPage({ type: 'rightHolders', viewRightHolderId: rightHolderId, prev: page });
+  const goToContracts = () => setPage({ type: 'contracts', prev: page });
   const goToReport = () => setPage({ type: 'report', prev: page });
   const goToCreateReport = () => setPage({ type: 'createReport', prev: page });
   const goToReportHistory = () => setPage({ type: 'reportHistory', prev: page });
@@ -132,6 +137,8 @@ function App() {
           onLogout={handleLogout}
           onMenuClick={(mod) => {
             if (mod === 'catalog') goToCatalog();
+            else if (mod === 'rightHolders') goToRightHolders();
+            else if (mod === 'contracts') goToContracts();
             else if (mod === 'report') goToReport();
             else if (mod === 'createReport') goToCreateReport();
             else if (mod === 'reportHistory') goToReportHistory();
@@ -151,6 +158,14 @@ function App() {
             <CatalogPage />
           )}
 
+          {page.type === 'rightHolders' && (
+            <RightHoldersPage initialViewId={page.viewRightHolderId} />
+          )}
+
+          {page.type === 'contracts' && (
+            <ContractPage onViewRightHolder={goToRightHolderView} />
+          )}
+
           {page.type === 'report' && (
             <ReportPage />
           )}
@@ -168,7 +183,7 @@ function App() {
           )}
 
           {page.type === 'list' && (
-            <TracksPage onTrackClick={goToTrack} />
+            <TracksPage onTrackClick={goToTrack} isComingFromDetail={page.prev?.type === 'track'} />
           )}
         </MainLayout>
       )}

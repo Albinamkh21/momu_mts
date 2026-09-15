@@ -1,0 +1,85 @@
+/* ── Inline contract editor (embedded after FilterPanel) ── */
+.contract-editor-inline {
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  padding: 20px;
+}
+
+.contract-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 700px;
+}
+
+.right-holder-selector {
+  margin-bottom: 8px;
+}
+
+.selector-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.right-holder-selector__row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.right-holder-selector__combobox {
+  position: relative;
+  flex: 1;
+  min-width: 200px;
+}
+
+.right-holder-selector__dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 2px 0 0;
+  padding: 4px 0;
+  list-style: none;
+  background: #fff;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+}
+
+.right-holder-selector__dropdown-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.right-holder-selector__dropdown-item:hover {
+  background: #f0f7ff;
+}
+
+.right-holder-selector__dropdown-item--muted {
+  color: #999;
+  cursor: default;
+}
+
+.right-holder-selector__dropdown-item--muted:hover {
+  background: transparent;
+}
+
+.right-holder-selector__select {
+  height: 38px;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.right-holder-selector__add-btn {
+  height: 38px;
+  box-sizing: border-box;
+  white-space: nowrap;
+}
