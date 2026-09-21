@@ -54,7 +54,3 @@ api_router.include_router(
     prefix="", 
     dependencies=[Depends(get_current_user)]
 )
-api_router.include_router(catalog_router, prefix="/catalog")
-api_router.include_router(catalog_v2_router, prefix="/catalog_v2")
-api_router.include_router(report_router, prefix="/report")
-api_router.include_router(users_router, prefix="")

@@ -2,6 +2,7 @@ import os
 import uuid
 from datetime import datetime
 import time
+from services.catalog_diff_service import save_track_right_diff, update_staging_track_ids, save_track_contribution_diff, generate_catalog_diff
 import polars as pl
 from polars import lit
 from sqlalchemy import create_engine, text
@@ -334,36 +335,47 @@ def _sync_tracks_v2_isrc(conn, upload_id, staging_table="staging_catalog_v2"):
     t0 = time.time()
     result_tracks = conn.execute(
         text(f"""
-        INSERT INTO track (isrc, label_own_code, title, title_norm_key, duration, explicit, resource_reference, meta)
-        SELECT DISTINCT ON (sc.id)
-            NULLIF(sc.isrc, '') AS isrc,
-            NULLIF(sc.right_id, '') AS label_own_code,
-            COALESCE(NULLIF(sc.track_name, ''), 'Unknown Track') AS title,
-            sc.track_name_norm_key AS title_norm_key,
-            sc.duration AS duration,
-            sc.explicit::BOOLEAN AS explicit,
-            NULLIF(sc.resource_reference, '') AS resource_reference,
-            JSONB_BUILD_OBJECT(
-                'track_number', NULLIF(sc.track_number, ''),
-                'genre', NULLIF(sc.genre_name, ''),
-                'has_ringtone', NULLIF(sc.has_ringtone, ''),
-                'ringtone_upc', NULLIF(sc.ringtone_upc, ''),
-                'ringtone_isrc', NULLIF(sc.ringtone_isrc, ''),
-                'has_vclip', NULLIF(sc.has_vclip, ''),
-                'vclip_isrc', NULLIF(sc.vclip_isrc, ''),
-                'video_upc', NULLIF(sc.video_upc, ''),
-                'has_lyrics', NULLIF(sc.has_lyrics, ''),
-                'has_ttml', NULLIF(sc.has_ttml, ''),
-                'sales_start_date', NULLIF(sc.sales_start_date, '')
-            ) AS meta
-        FROM {staging_table} sc
-        WHERE  sc.isrc IS NOT NULL  AND sc.upload_id = :upload_id
-            AND NOT EXISTS (
-            SELECT 1 FROM track t2 
-            WHERE sc.isrc IS NOT NULL  AND t2.isrc = sc.isrc  AND t2.label_own_code = NULLIF(sc.right_id, '')
+      
+        WITH new_tracks AS (
+            SELECT DISTINCT ON (sc.id)
+                sc.id AS staging_id,
+                NULLIF(sc.isrc, '') AS isrc,
+                NULLIF(sc.right_id, '') AS label_own_code,
+                COALESCE(NULLIF(sc.track_name, ''), 'Unknown Track') AS title,
+                sc.track_name_norm_key AS title_norm_key,
+                sc.duration AS duration,
+                sc.explicit::BOOLEAN AS explicit,
+                NULLIF(sc.resource_reference, '') AS resource_reference,
+                JSONB_BUILD_OBJECT(
+                    'track_number', NULLIF(sc.track_number, ''),
+                    'genre', NULLIF(sc.genre_name, ''),
+                    'has_ringtone', NULLIF(sc.has_ringtone, ''),
+                    'ringtone_upc', NULLIF(sc.ringtone_upc, ''),
+                    'ringtone_isrc', NULLIF(sc.ringtone_isrc, ''),
+                    'has_vclip', NULLIF(sc.has_vclip, ''),
+                    'vclip_isrc', NULLIF(sc.vclip_isrc, ''),
+                    'video_upc', NULLIF(sc.video_upc, ''),
+                    'has_lyrics', NULLIF(sc.has_lyrics, ''),
+                    'has_ttml', NULLIF(sc.has_ttml, ''),
+                    'sales_start_date', NULLIF(sc.sales_start_date, '')
+                ) AS meta
+            FROM {staging_table} sc
+            WHERE  sc.isrc IS NOT NULL  AND sc.upload_id = :upload_id
+                AND NOT EXISTS (
+                SELECT 1 FROM track t2 
+                WHERE sc.isrc IS NOT NULL  AND t2.isrc = sc.isrc  AND t2.label_own_code = NULLIF(sc.right_id, '')
+            )
+            ORDER BY sc.id
+        ),
+        insert_step AS (
+            INSERT INTO track (isrc, label_own_code, title, title_norm_key, duration, explicit, resource_reference, meta)
+            SELECT isrc, label_own_code, title, title_norm_key, duration, explicit, resource_reference, meta
+          FROM new_tracks
         )
-        ORDER BY sc.id;
-    
+        UPDATE {staging_table}
+        SET status = 'inserted' 
+        FROM new_tracks
+        WHERE {staging_table}.id = new_tracks.staging_id;
 
         """), {"upload_id": upload_id}
     )
@@ -379,38 +391,51 @@ def _sync_tracks_v2_label_code(conn, upload_id, staging_table="staging_catalog_v
     t0 = time.time()
     result_tracks = conn.execute(
         text(f"""
-        INSERT INTO track (isrc, label_own_code, title, title_norm_key, duration, explicit, resource_reference, meta)
-        SELECT DISTINCT ON (sc.id)
-            NULLIF(sc.isrc, '') AS isrc,
-            NULLIF(sc.right_id, '') AS label_own_code,
-            COALESCE(NULLIF(sc.track_name, ''), 'Unknown Track') AS title,
-            sc.track_name_norm_key AS title_norm_key,
-            sc.duration AS duration,
-            sc.explicit::BOOLEAN AS explicit,
-            NULLIF(sc.resource_reference, '') AS resource_reference,
-            JSONB_BUILD_OBJECT(
-                'track_number', NULLIF(sc.track_number, ''),
-                'genre', NULLIF(sc.genre_name, ''),
-                'has_ringtone', NULLIF(sc.has_ringtone, ''),
-                'ringtone_upc', NULLIF(sc.ringtone_upc, ''),
-                'ringtone_isrc', NULLIF(sc.ringtone_isrc, ''),
-                'has_vclip', NULLIF(sc.has_vclip, ''),
-                'vclip_isrc', NULLIF(sc.vclip_isrc, ''),
-                'video_upc', NULLIF(sc.video_upc, ''),
-                'has_lyrics', NULLIF(sc.has_lyrics, ''),
-                'has_ttml', NULLIF(sc.has_ttml, ''),
-                'sales_start_date', NULLIF(sc.sales_start_date, '')
-            ) AS meta
-        FROM {staging_table} sc
-        WHERE  sc.isrc IS NULL AND  sc.upload_id = :upload_id and NULLIF(sc.right_id, '') IS NOT NULL
-            AND NOT EXISTS (
-            SELECT 1 FROM track t2 
-            WHERE (sc.isrc IS NULL ) 
-                 AND t2.label_own_code = NULLIF(sc.right_id, '')
-                 AND t2.title_norm_key = sc.track_name_norm_key
-              
-           )
-        ORDER BY sc.id;
+    
+        WITH new_tracks AS (
+ 
+            SELECT DISTINCT ON (sc.id)
+                sc.id AS staging_id,
+                NULLIF(sc.isrc, '') AS isrc,
+                NULLIF(sc.right_id, '') AS label_own_code,
+                COALESCE(NULLIF(sc.track_name, ''), 'Unknown Track') AS title,
+                sc.track_name_norm_key AS title_norm_key,
+                sc.duration AS duration,
+                sc.explicit::BOOLEAN AS explicit,
+                NULLIF(sc.resource_reference, '') AS resource_reference,
+                JSONB_BUILD_OBJECT(
+                    'track_number', NULLIF(sc.track_number, ''),
+                    'genre', NULLIF(sc.genre_name, ''),
+                    'has_ringtone', NULLIF(sc.has_ringtone, ''),
+                    'ringtone_upc', NULLIF(sc.ringtone_upc, ''),
+                    'ringtone_isrc', NULLIF(sc.ringtone_isrc, ''),
+                    'has_vclip', NULLIF(sc.has_vclip, ''),
+                    'vclip_isrc', NULLIF(sc.vclip_isrc, ''),
+                    'video_upc', NULLIF(sc.video_upc, ''),
+                    'has_lyrics', NULLIF(sc.has_lyrics, ''),
+                    'has_ttml', NULLIF(sc.has_ttml, ''),
+                    'sales_start_date', NULLIF(sc.sales_start_date, '')
+                ) AS meta
+            FROM {staging_table} sc
+            WHERE  sc.isrc IS NULL AND  sc.upload_id = :upload_id and NULLIF(sc.right_id, '') IS NOT NULL
+                AND NOT EXISTS (
+                SELECT 1 FROM track t2 
+                WHERE (sc.isrc IS NULL ) 
+                    AND t2.label_own_code = NULLIF(sc.right_id, '')
+                    AND t2.title_norm_key = sc.track_name_norm_key
+                
+            )
+            ORDER BY sc.id
+        ),
+        insert_step AS (
+                    INSERT INTO track (isrc, label_own_code, title, title_norm_key, duration, explicit, resource_reference, meta)
+                    SELECT isrc, label_own_code, title, title_norm_key, duration, explicit, resource_reference, meta
+                  FROM new_tracks
+                )
+        UPDATE {staging_table}
+        SET status = 'inserted' 
+        FROM new_tracks
+        WHERE {staging_table}.id = new_tracks.staging_id;
 
         """), {"upload_id": upload_id}
     )
@@ -480,7 +505,7 @@ def _build_track_map_v2(conn, upload_id, staging_table="staging_catalog_v2"):
         FROM {staging_table} sc
         JOIN track t ON t.isrc = sc.isrc  AND t.label_own_code = NULLIF(sc.right_id, '')
         LEFT JOIN release r ON r.upc = sc.upc
-        WHERE sc.upload_id = :upload_id  AND sc.isrc IS NOT NULL
+        WHERE sc.upload_id = :upload_id  AND sc.isrc IS NOT NULL and sc.status = 'inserted'
         
         UNION ALL
 
@@ -491,7 +516,7 @@ def _build_track_map_v2(conn, upload_id, staging_table="staging_catalog_v2"):
         FROM {staging_table} sc
         JOIN track t ON t.title_norm_key = sc.track_name_norm_key   AND t.label_own_code = NULLIF(sc.right_id, '')
         LEFT JOIN release r ON r.upc = sc.upc
-        WHERE sc.upload_id = :upload_id   AND (sc.isrc IS NULL ) AND NULLIF(sc.right_id, '') IS NOT NULL;
+        WHERE sc.upload_id = :upload_id   AND (sc.isrc IS NULL ) AND NULLIF(sc.right_id, '') IS NOT NULL and sc.status = 'inserted';
         
     
         CREATE INDEX idx_tmp_map_sid ON tmp_track_map(staging_id);
@@ -725,13 +750,14 @@ def sync_catalog_dictionaries(self, prev_result, version="v2"):
           
             
 
-            _cleanup_staging_v2(conn, upload_id, staging_table=staging_table)
-            print(f"🧹 Staging очищен после синхронизации.")
+            #_cleanup_staging_v2(conn, upload_id, staging_table=staging_table)
+            #print(f"🧹 Staging очищен после синхронизации.")
        
             success = True
 
             return {
                 "status": "success",
+                "upload_id": upload_id,
                 "stats": {
                     "labels": labels_count,
                     "persons_staging": persons_staging_count,
@@ -845,3 +871,138 @@ def _sync_track_rights_v1(conn, upload_id):
     print(f"🏁 ИТОГО вставлено в track_right (v1): {track_rights_count} ({elapsed:.1f} сек)")
     TaskProgress.emit(task_id, f"🏁 ИТОГО вставлено в track_right (v1): {track_rights_count} ({elapsed:.1f} сек)")
     return track_rights_count
+
+
+@celery_app.task(name="tasks.generate_catalog_diff", bind=True)
+def generate_catalog_diff_task(self, prev_result: dict, label_id: int) -> dict:
+    """
+    prev_result - это то, что вернула process_catalog_file_v2
+    Например: {"status": "success", "upload_id": "1234-5678", "total_rows": 100}
+    """
+    
+    # 1. Достаем upload_id из результата первой задачи
+    upload_id = prev_result.get("upload_id")
+    
+    if not upload_id:
+        return {"status": "error", "message": "upload_id не найден"}
+
+    # 2. Вызываем саму логику расчета диффа
+    with engine.begin() as conn:
+
+        save_track_contribution_diff(conn, upload_id, task_id=getattr(self.request, 'id', None))
+        save_track_right_diff(conn, upload_id, task_id=getattr(self.request, 'id', None))
+
+        # 3. Собираем данные по изменившимся трекам (old/new) для проверки пользователем
+        diff_rows = generate_catalog_diff(conn, upload_id, label_id=label_id)
+
+    return {
+        "status": "completed",
+        "upload_id": upload_id,
+        "label_id": label_id,
+        "total_diff_rows": len(diff_rows) // 2,
+        "diff": diff_rows
+    }
+
+
+@celery_app.task(name="sync_catalog_dictionaries_for_update", bind=True)
+def sync_catalog_dictionaries_for_update(self, prev_result, version="v2"):
+    upload_id = prev_result.get("upload_id") if isinstance(prev_result, dict) else prev_result
+    task_id = getattr(self.request, 'id', None)
+    success = False
+    staging_table = "staging_catalog_v2"
+    try:
+     
+        # Phase 3: Основная синхронизация
+        with engine.begin() as conn:
+            print("📋 [v2] Начинаем синхронизацию справочников...")
+            TaskProgress.emit(task_id, "📋 [v2] Начинаем синхронизацию справочников...")
+            labels_count = _sync_labels_v2(conn, upload_id, staging_table=staging_table)
+            persons_staging_count = _sync_persons_v2(conn, upload_id, staging_table=staging_table)
+
+            # Phase 2: Нормализация 
+            from .report_tasks import normalize_person_data, normalize_data
+            print("📋 [v2] Нормализация staging_person...")
+            TaskProgress.emit(task_id, "📋 [v2] Нормализация staging_person...")
+            normalize_person_data("staging_person", "full_name", "tokens", "full_name_norm_key", connection=conn)
+            print("📋 [v2] Нормализация staging_catalog_v2.track_name...")
+            TaskProgress.emit(task_id, "📋 [v2] Нормализация staging_catalog_v2.track_name...")
+
+            normalize_data("staging_catalog_v2", "track_name", connection=conn)
+
+            persons_count = _insert_unique_persons_v2(conn, upload_id)
+            #rights_count = _sync_right_holders_v2(conn, upload_id)
+        
+            releases_count = _sync_releases_v2(conn, upload_id, staging_table=staging_table)
+
+            #Inportant diff between processing tracks
+            # обновляет стеджинг, чтобы знать кто есть уже в таблице track
+            update_staging_track_ids(conn, upload_id, task_id=getattr(self.request, 'id', None))
+
+
+
+            
+            # todo : нужно пометить треки, как новые или обновлённые, перед синхронизацией
+            # в таблице track добавить флаг - 
+            # или писать в staging_track_diff
+            tracks_count_isrc = _sync_tracks_v2_isrc(conn, upload_id, staging_table=staging_table)   
+            tracks_count_code = _sync_tracks_v2_label_code(conn, upload_id, staging_table=staging_table)
+           
+
+            _build_track_map_v2(conn, upload_id, staging_table=staging_table)
+
+            track_release_count = _sync_track_releases_v2(conn, upload_id, staging_table=staging_table)
+            contributions_count = _sync_track_contributions_v2(conn, upload_id)
+
+            #track_rights_count = _sync_track_rights_v2(conn, upload_id)
+            _sync_track_labels_v2(conn, upload_id, staging_table=staging_table)
+
+            if version == "v2":
+                rights_count = _sync_right_holders_v2(conn, upload_id, staging_table=staging_table)
+                track_rights_count = _sync_track_rights_v2(conn, upload_id, staging_table=staging_table)
+            else:
+                rights_count = _sync_right_holders_v1(conn, upload_id)
+                track_rights_count = _sync_track_rights_v1(conn, upload_id)
+
+            #_sync_track_labels_v2(conn, upload_id, staging_table=staging_table)
+
+          
+            
+
+            #_cleanup_staging_v2(conn, upload_id, staging_table=staging_table)
+            print(f"🧹 Staging очищен после синхронизации.")
+       
+            success = True
+
+            return {
+                "status": "success",
+                "upload_id": upload_id,
+                "stats": {
+                    "labels": labels_count,
+                    "persons_staging": persons_staging_count,
+                    "persons": persons_count,
+                    "right_holders": rights_count,
+                    "releases": releases_count,
+                    "tracks": tracks_count_isrc + tracks_count_code,
+                    "track_releases": track_release_count,
+                    "track_contributions": contributions_count,
+                    "track_rights": track_rights_count
+                }
+            }
+        with engine.begin() as conn:
+           TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Начинаем обновление представлений.") 
+          #conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_extended; "))
+           #conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights_prev; "))
+           #conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights; "))
+       
+           print(f"🏁 Представления обновлены.")
+        TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Загружка каталога завершена полностью.")
+    except Exception as e:
+        print(f"[v2] ❌ Ошибка заполнения справочников: {e}")
+        TaskProgress.emit(task_id, f"[v2] ❌ Ошибка заполнения справочников: {e}")
+        return {"status": "error", "message": str(e)}
+
+    finally:
+        if not success:
+            with engine.begin() as clean_conn:
+                _cleanup_staging_v2(clean_conn, upload_id, staging_table=staging_table)
+            TaskProgress.emit(task_id, "🧹 Staging очищен после ошибки")

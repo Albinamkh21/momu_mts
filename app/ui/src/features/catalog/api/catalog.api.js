@@ -49,3 +49,20 @@
     const { data } = await httpClient.get('/v1/users'); 
     return data;
   };
+
+  // Пересчёт diff (сверка staging-файла с боевым каталогом)
+  export const recalculateDiff = async (file, label_id) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('label_id', label_id);
+    const { data } = await httpClient.post('/v1/catalog_v2/recalculate_diff', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return data;
+  };
+
+  // Результат задачи пересчёта diff (опрашивается по task_id до готовности)
+  export const getDiffResult = async (taskId) => {
+    const { data } = await httpClient.get(`/v1/catalog_v2/diff_result/${taskId}`);
+    return data;
+  };

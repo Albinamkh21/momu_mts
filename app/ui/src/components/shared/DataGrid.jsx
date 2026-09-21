@@ -17,6 +17,7 @@ export const DataGrid = ({
   searchTrigger,
   pageSize = 100,
   deleteConfirm,
+  getRowClass,
 }) => {
   const gridApiRef = useRef(null);
   const [rowToDelete, setRowToDelete] = useState(null);
@@ -65,6 +66,7 @@ export const DataGrid = ({
         onGridReady={onGridReady}
         maxConcurrentDatasourceRequests={1}
         context={context}
+        getRowClass={getRowClass}
       />
 
       {deleteConfirm && (

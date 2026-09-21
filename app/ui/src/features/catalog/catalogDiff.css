@@ -1,0 +1,29 @@
+.diff-row-old {
+  background-color: #fff2f2 !important;
+}
+
+.diff-row-new {
+  background-color: #f1fbf3 !important;
+}
+
+.diff-cell-changed {
+  font-weight: 600;
+  color: #b3261e;
+}
+
+.diff-row-badge {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.diff-row-badge--old {
+  background-color: #ffd9d9;
+  color: #8a1f1f;
+}
+
+.diff-row-badge--new {
+  background-color: #d7f3dc;
+  color: #1e6b2c;
+}

@@ -5,7 +5,9 @@ import { DICTIONARIES } from '../../features/dictionaries/dictionariesConfig';
 export function MainLayout({ children, currentPage, currentDictKey, currentUser, onLogout, onMenuClick, onDictionarySelect }) {
   // Проверяем, активен ли раздел Треков (включая детализацию)
   const isTracksActive = ['list', 'track', 'person'].includes(currentPage);
-  const isCatalogActive = currentPage === 'catalog';
+  const isCatalogUploadActive = currentPage === 'catalog';
+  const isCatalogDiffActive = currentPage === 'catalogDiff';
+  const isCatalogActive = isCatalogUploadActive || isCatalogDiffActive;
   const isRightHoldersActive = currentPage === 'rightHolders';
   const isContractsActive = currentPage === 'contracts';
   const isReportActive = currentPage === 'report';
@@ -15,6 +17,7 @@ export function MainLayout({ children, currentPage, currentDictKey, currentUser,
   const isReportsActive = isReportActive || isCreateReportActive || isReportHistoryActive;
   const [dictMenuOpen, setDictMenuOpen] = useState(isDictionariesActive);
   const [reportsMenuOpen, setReportsMenuOpen] = useState(isReportsActive);
+  const [catalogMenuOpen, setCatalogMenuOpen] = useState(isCatalogActive);
 
   return (
     <div className="app-minimal">
@@ -29,11 +32,28 @@ export function MainLayout({ children, currentPage, currentDictKey, currentUser,
             🎵 Треки
           </button>
           <button
-            onClick={() => onMenuClick('catalog')}
-            className={`nav-link-btn ${isCatalogActive ? 'active' : ''}`}
+            onClick={() => setCatalogMenuOpen((open) => !open)}
+            className={`nav-link-btn nav-link-btn--parent ${isCatalogActive ? 'active' : ''}`}
           >
             📂 Каталог
+            <span className={`nav-submenu-arrow ${catalogMenuOpen ? 'nav-submenu-arrow--open' : ''}`}>▾</span>
           </button>
+          {catalogMenuOpen && (
+            <div className="nav-submenu">
+              <button
+                onClick={() => onMenuClick('catalog')}
+                className={`nav-submenu-item ${isCatalogUploadActive ? 'active' : ''}`}
+              >
+                Загрузка/выгрузка
+              </button>
+              <button
+                onClick={() => onMenuClick('catalogDiff')}
+                className={`nav-submenu-item ${isCatalogDiffActive ? 'active' : ''}`}
+              >
+                Проверка изменений
+              </button>
+            </div>
+          )}
           <button
             onClick={() => onMenuClick('rightHolders')}
             className={`nav-link-btn ${isRightHoldersActive ? 'active' : ''}`}

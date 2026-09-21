@@ -7,6 +7,7 @@ import { PersonDetailPage } from './features/tracks/PersonDetailPage';
 import { RightHoldersPage } from './features/rightHolders/RightHoldersPage';
 import { ContractPage } from './features/contracts/ContractPage';
 import { CatalogPage } from './features/catalog/CatalogPage';
+import { CatalogDiffPage } from './features/catalog/CatalogDiffPage';
 import { ReportPage } from './features/report/ReportPage';
 import { CreateReportPage } from './features/report/CreateReportPage';
 import { ReportHistoryPage } from './features/reportHistory/ReportHistoryPage';
@@ -60,6 +61,7 @@ function App() {
   const goToTrack = (id) => setPage({ type: 'track', id });
   const goToPerson = (id) => setPage({ type: 'person', id, prev: page });
   const goToCatalog = () => setPage({ type: 'catalog', prev: page });
+  const goToCatalogDiff = () => setPage({ type: 'catalogDiff', prev: page });
   const goToRightHolders = () => setPage({ type: 'rightHolders', prev: page });
   const goToRightHolderView = (rightHolderId) => setPage({ type: 'rightHolders', viewRightHolderId: rightHolderId, prev: page });
   const goToContracts = () => setPage({ type: 'contracts', prev: page });
@@ -137,6 +139,7 @@ function App() {
           onLogout={handleLogout}
           onMenuClick={(mod) => {
             if (mod === 'catalog') goToCatalog();
+            else if (mod === 'catalogDiff') goToCatalogDiff();
             else if (mod === 'rightHolders') goToRightHolders();
             else if (mod === 'contracts') goToContracts();
             else if (mod === 'report') goToReport();
@@ -156,6 +159,10 @@ function App() {
 
           {page.type === 'catalog' && (
             <CatalogPage />
+          )}
+
+          {page.type === 'catalogDiff' && (
+            <CatalogDiffPage />
           )}
 
           {page.type === 'rightHolders' && (

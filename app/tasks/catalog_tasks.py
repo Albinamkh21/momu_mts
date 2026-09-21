@@ -426,12 +426,12 @@ def delete_data_from_all_dictionaries_by_label(self, label_id: int):
             print(f"✅ person (осиротевших) удалено: {r_persons.rowcount}")
             TaskProgress.emit(task_id, f"✅ person (осиротевших) удалено: {r_persons.rowcount}")
 
-            r_right_holders = conn.execute(text("""
-                DELETE FROM right_holder rh
-                WHERE NOT EXISTS (SELECT 1 FROM track_right tr WHERE tr.right_holder_id = rh.id)
-            """))
-            print(f"✅ right_holder (осиротевших) удалено: {r_right_holders.rowcount}")
-            TaskProgress.emit(task_id, f"✅ right_holder (осиротевших) удалено: {r_right_holders.rowcount}")
+            #r_right_holders = conn.execute(text("""
+            #    DELETE FROM right_holder rh
+            #    WHERE NOT EXISTS (SELECT 1 FROM track_right tr WHERE tr.right_holder_id = rh.id)
+            #"""))
+            #print(f"✅ right_holder (осиротевших) удалено: {r_right_holders.rowcount}")
+            #TaskProgress.emit(task_id, f"✅ right_holder (осиротевших) удалено: {r_right_holders.rowcount}")
 
             stats = {
                 "tracks": r_tracks.rowcount,
@@ -442,15 +442,16 @@ def delete_data_from_all_dictionaries_by_label(self, label_id: int):
                 "track_labels": r_track_label.rowcount,
                 "releases": r_releases.rowcount,
                 "persons": r_persons.rowcount
+                #"right_holders": r_right_holders.rowcount
 
             }
 
         with engine.begin() as conn:
             #обновляем материализованное представление, чтобы не было рассинхрона
            TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Начинаем обновление представлений.") 
-           conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_extended; "))
-           conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights_prev; "))
-           conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights; "))
+           #conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_extended; "))
+           #conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights_prev; "))
+           #conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights; "))
            print(f"🏁 Представления обновлены.")
            TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Представления обновлены.")
 
