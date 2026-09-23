@@ -725,3 +725,27 @@ class ReportTrackRightsDistribution(Base):
     final_payout_amount: Mapped[decimal.Decimal] = mapped_column(Numeric(15, 6), nullable=False)
     is_normalized: Mapped[Optional[bool]] = mapped_column(Boolean, server_default=text('FALSE'))
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, server_default=text('CURRENT_TIMESTAMP'))
+
+
+class CatalogUpload(Base):
+    __tablename__ = 'catalog_upload'
+    __table_args__ = (
+        PrimaryKeyConstraint('id', name='catalog_upload_pkey'),
+        UniqueConstraint('upload_id', name='catalog_upload_upload_id_key'),
+        ForeignKeyConstraint(['label_id'], ['label.id'], ondelete='RESTRICT', name='catalog_upload_label_id_fkey'),
+        ForeignKeyConstraint(['user_id'], ['user.id'], ondelete='RESTRICT', name='catalog_upload_user_id_fkey'), # Укажите 'users.id', если таблица во множественном числе
+        Index('idx_catalog_upload_label_id', 'label_id'),
+        Index('idx_catalog_upload_upload_id', 'upload_id'),
+        Index('idx_catalog_upload_user_id', 'user_id'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    upload_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    label_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    filename: Mapped[Optional[str]] = mapped_column(Text)
+    status: Mapped[Optional[str]] = mapped_column(String(50), server_default=text("'PROCESSING'"))
+    created_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(True), server_default=text('CURRENT_TIMESTAMP'))
+
+    label: Mapped['Label'] = relationship('Label')
+    # user: Mapped['User'] = relationship('User') # Разкомментируйте при наличии модели User    

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { recalculateDiff, getDiffResult, getLabels } from './api/catalog.api';
+// ДОБАВЛЕНО: импорт getCatalogDiff
+import { recalculateDiff, getDiffResult, getLabels, updateCatalog, getCatalogDiff } from './api/catalog.api';
 import { CatalogDiffGrid } from './components/CatalogDiffGrid';
 import './catalogDiff.css';
 
@@ -78,6 +79,77 @@ export function CatalogDiffPage() {
     }
   };
 
+  const handleSaveCatalogDiff = async () => {
+    // Проверяем, что labelId заполнен (не пустая строка и не null/undefined)
+    if (!labelId) {
+      setMessage('❌ Ошибка: не выбран лейбл');
+      return;
+    }
+
+    setUploading(true);
+    setMessage('⏳ Обновление данных из каталога...');
+
+    try {
+      // Передаем значение labelId из state
+      await updateCatalog(labelId);
+      setMessage('✅ Данные успешно обновлены из каталога');
+    } catch (err) {
+      setMessage('❌ Ошибка при обновлении: ' + (err.response?.data?.detail || err.message));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleGetCatalogDiff = async () => {
+    if (!labelId) {
+      setMessage('❌ Ошибка: не выбран лейбл');
+      return;
+    }
+
+    setUploading(true);
+    setMessage('⏳ Получение изменений каталога...');
+    // Очищаем текущую таблицу перед новым запросом
+    setRows([]);
+
+    try {
+      const response = await getCatalogDiff(labelId);
+      const taskId = response.task_id;
+      
+      // Используем polling для получения результата асинхронной задачи
+      const pollInterval = setInterval(async () => {
+        try {
+          const res = await getDiffResult(taskId);
+          if (!res.ready) return;
+
+          clearInterval(pollInterval);
+          setUploading(false);
+
+          if (res.status === 'FAILURE') {
+            setMessage('❌ Ошибка при получении изменений: ' + (res.error || 'неизвестная ошибка'));
+            return;
+          }
+
+          const diffRows = res.result?.diff || [];
+          setRows(diffRows);
+          setSearchTrigger((prev) => prev + 1);
+          const totalTracks = res.result?.total_diff_rows ?? diffRows.length / 2;
+          setMessage(
+            totalTracks > 0
+              ? `✅ Успешно получены изменения. Изменённых треков: ${totalTracks}`
+              : '✅ Активных изменений (в статусе PROCESSING) для данного лейбла не найдено.'
+          );
+        } catch (err) {
+          clearInterval(pollInterval);
+          setUploading(false);
+          setMessage('❌ Ошибка при получении результата: ' + err.message);
+        }
+      }, POLL_INTERVAL_MS);
+    } catch (err) {
+      setUploading(false);
+      setMessage('❌ Ошибка при запуске получения изменений: ' + (err.response?.data?.detail || err.message));
+    }
+  };
+
   return (
     <div className="page-container">
       <h1 className="page-title">Проверка изменений каталога</h1>
@@ -102,6 +174,17 @@ export function CatalogDiffPage() {
           </button>
         </div>
       </form>
+
+      <div className="action-section">
+        <button onClick={handleSaveCatalogDiff} disabled={uploading} className="btn btn-primary">
+          {uploading ? 'Обновление...' : 'Обновить данные из каталога'}
+        </button>
+      </div>
+      <div className="action-section">
+        <button onClick={handleGetCatalogDiff} disabled={uploading} className="btn btn-primary">
+          {uploading ? 'Получение...' : 'Получить изменения каталога'}
+        </button>
+      </div>
 
       {message && (
         <div className={`alert-message ${message.includes('❌') ? 'error' : 'success'}`}>

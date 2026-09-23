@@ -66,3 +66,21 @@
     const { data } = await httpClient.get(`/v1/catalog_v2/diff_result/${taskId}`);
     return data;
   };
+  
+
+export const updateCatalog = async (labelId) => {
+  const params = new URLSearchParams();
+  params.append('label_id', parseInt(labelId));
+  
+  const { data } = await httpClient.post('/v1/catalog_v2/save_catalog_diff', params, {
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  });
+  return data;
+};
+
+export const getCatalogDiff = async (labelId) => {
+  // Параметр передается прямо в URL (Path Parameter), поэтому query params не нужны
+  const { data } = await httpClient.get(`/v1/catalog_v2/get_catalog_diff/${labelId}`);
+  return data; // Вернет { message, task_id, filename }
+};
+
