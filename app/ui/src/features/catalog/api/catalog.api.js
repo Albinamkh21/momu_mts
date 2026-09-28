@@ -51,10 +51,11 @@
   };
 
   // Пересчёт diff (сверка staging-файла с боевым каталогом)
-  export const recalculateDiff = async (file, label_id) => {
+  export const recalculateDiff = async (file, label_id, isAdditionalData = true) => {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('label_id', label_id);
+    formData.append('is_additional_data', isAdditionalData);
     const { data } = await httpClient.post('/v1/catalog_v2/recalculate_diff', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
@@ -82,5 +83,27 @@ export const getCatalogDiff = async (labelId) => {
   // Параметр передается прямо в URL (Path Parameter), поэтому query params не нужны
   const { data } = await httpClient.get(`/v1/catalog_v2/get_catalog_diff/${labelId}`);
   return data; // Вернет { message, task_id, filename }
+};
+
+// Удаление текущей загрузки (незасинхронизированного diff) по лейблу
+export const deleteCatalogDiff = async (labelId) => {
+  const params = new URLSearchParams();
+  params.append('label_id', parseInt(labelId));
+  const { data } = await httpClient.post('/v1/catalog_v2/delete_catalog_diff', params, {
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  });
+  return data;
+};
+
+// Сохранение diff в файл
+export const downloadCatalogDiff = async (labelId) => {
+  const { data } = await httpClient.get(`/v1/catalog_v2/download_catalog_diff/${labelId}`);
+  return data;
+};
+
+// Получение удалённых треков по лейблу
+export const getCatalogDeleted = async (labelId) => {
+  const { data } = await httpClient.get(`/v1/catalog_v2/get_catalog_deleted/${labelId}`);
+  return data;
 };
 

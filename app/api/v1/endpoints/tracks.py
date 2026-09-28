@@ -205,8 +205,8 @@ def get_track_detail(track_id: int = Path(...), db: Session = Depends(get_db)):
             text("""
                 SELECT r.id, r.upc, r.title, r.release_date, r.status
                 FROM "release" r
-                JOIN track t ON t.release_id = r.id
-                WHERE t.id = :tid
+                JOIN track_release tr ON tr.release_id = r.id
+                WHERE tr.track_id = :tid
             """),
             {"tid": track_id},
         ).fetchone()

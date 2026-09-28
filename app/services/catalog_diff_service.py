@@ -55,7 +55,7 @@ def update_staging_track_ids(conn, upload_id: str, task_id: str):
     query = text("""
             
             UPDATE staging_catalog_v2 sc
-            SET track_id = t.id
+            SET track_id = t.id, status = 'existing'
             FROM track t
             WHERE sc.upload_id = :upload_id
             AND sc.track_id IS NULL
@@ -65,7 +65,7 @@ def update_staging_track_ids(conn, upload_id: str, task_id: str):
 
            
             UPDATE staging_catalog_v2 sc
-            SET track_id = t.id
+            SET track_id = t.id, status = 'existing'
             FROM track t
             WHERE sc.upload_id = :upload_id
             AND sc.track_id IS NULL
@@ -78,7 +78,50 @@ def update_staging_track_ids(conn, upload_id: str, task_id: str):
     print("Finished track update in staging_catalog_v2")
 
 
-def save_track_contribution_diff(conn, upload_id: str, task_id: str):
+
+def update_catalog_statistics(conn, upload_id: str, task_id: str) -> dict:
+    TaskProgress.emit(task_id, "Starting track update statistics in staging_catalog_v2")
+    print("Starting track update statistics in staging_catalog_v2")
+    
+    query = text("""
+        WITH modified_tracks AS (
+            -- Получаем уникальные ID треков, у которых есть хотя бы одно изменение
+            SELECT DISTINCT track_id
+            FROM staging_track_diff
+            WHERE upload_id = :upload_id 
+              AND track_id IS NOT NULL
+        )
+        SELECT
+            COUNT(1) FILTER (WHERE sc.status = 'new') AS new_count,
+            COUNT(1) FILTER (WHERE sc.status = 'existing') AS existing_count,
+            COUNT(1) FILTER (WHERE sc.status = 'existing' AND mt.track_id IS NOT NULL) AS modified_count
+        FROM staging_catalog_v2 sc
+        LEFT JOIN modified_tracks mt ON mt.track_id = sc.track_id
+        WHERE sc.upload_id = :upload_id
+    """)
+    
+    row = conn.execute(query, {"upload_id": upload_id}).fetchone()
+    
+    new_count = row[0] or 0
+    existing_count = row[1] or 0
+    modified_count = row[2] or 0
+    
+    msg = (
+        f"Finished statistics calculation: "
+        f"Новых треков: {new_count}, "
+        f"Существующих: {existing_count} (из них измененных: {modified_count})"
+    )
+    
+    TaskProgress.emit(task_id, msg)
+    print(msg)
+    
+    return {
+        "new_tracks": new_count,
+        "existing_tracks": existing_count,
+        "modified_tracks": modified_count
+    }
+
+def find_track_contribution_diff(conn, upload_id: str, task_id: str):
     t0 = time.time()
     
     # 1. Создаем таблицу для хранения диффов, если она еще не существует
@@ -195,10 +238,8 @@ def save_track_contribution_diff(conn, upload_id: str, task_id: str):
     
     return total_diffs
 
-    
 
-
-def save_track_right_diff(conn, upload_id: str, task_id: str):
+def find_track_right_diff(conn, upload_id: str, task_id: str):
     TaskProgress.emit(task_id, "Starting track update in staging_catalog_v2")
     print("Starting track update in staging_catalog_v2")
     
@@ -330,9 +371,145 @@ def save_track_right_diff(conn, upload_id: str, task_id: str):
     return result.rowcount
 
 
-
-
-
+def find_tracks_common_info_diff(conn, upload_id: str, task_id: str):
+    """
+    Сравнивает базовую информацию о треках между staging_catalog_v2 и track таблицей.
+    Проверяет различия в:
+    - isrc (строка)
+    - duration (интервал)
+    - explicit (boolean)
+    - resource_reference (текст)
+    - label_own_code (строка из right_id)
+    - meta полем (JSONB): genre_name, track_number, has_ringtone, ringtone_upc, ringtone_isrc, 
+      has_vclip, vclip_isrc, video_upc, has_lyrics, has_ttml, sales_start_date
+    """
+    TaskProgress.emit(task_id, "Starting common track info comparison")
+    print("Starting common track info comparison")
+    
+    # Очистка предыдущих расхождений по этому upload_id для common_info
+    conn.execute(text("""
+        DELETE FROM staging_track_diff 
+        WHERE upload_id = :upload_id AND field_name IN 
+            ('isrc', 'duration', 'explicit', 'resource_reference', 'label_own_code', 
+             'track_number', 'genre', 'has_ringtone', 'ringtone_upc', 'ringtone_isrc',
+             'has_vclip', 'vclip_isrc', 'video_upc', 'has_lyrics', 'has_ttml', 'sales_start_date');
+    """), {"upload_id": upload_id})
+    
+    t0 = time.time()
+    total_diffs = 0
+    
+    # Список полей для сравнения (простые поля)
+    common_fields = [
+        ('isrc', 'sc.isrc', 't.isrc'),
+        ('duration', 'sc.duration', "t.duration::text"),  # Преобразуем INTERVAL в text для сравнения
+        ('explicit', 'sc.explicit', 't.explicit::text'),
+        ('resource_reference', 'sc.resource_reference', 't.resource_reference'),
+        ('label_own_code', 'NULLIF(sc.right_id, \'\')', 't.label_own_code'),
+    ]
+    
+    # Сравнение простых полей
+    for field_name, staging_col, track_col in common_fields:
+        sql = f"""
+        WITH target_track AS (
+            SELECT 
+                sc.id AS staging_id,
+                sc.track_id,
+                sc.track_name,
+                {staging_col} AS staging_value,
+                {track_col} AS track_value
+            FROM staging_catalog_v2 sc
+            LEFT JOIN track t ON sc.track_id::bigint = t.id
+            WHERE sc.track_id IS NOT NULL 
+              AND sc.upload_id = :upload_id
+        )
+        INSERT INTO staging_track_diff (
+            track_id, 
+            track_name, 
+            upload_id, 
+            field_name, 
+            old_value, 
+            new_value
+        )
+        SELECT 
+            tt.track_id::bigint,
+            tt.track_name,
+            :upload_id AS upload_id,
+            :field_name AS field_name,
+            COALESCE(tt.track_value::text, '') AS old_value,
+            COALESCE(tt.staging_value::text, '') AS new_value
+        FROM target_track tt
+        WHERE COALESCE(tt.staging_value::text, '') IS DISTINCT FROM COALESCE(tt.track_value::text, '')
+          AND (tt.staging_value IS NOT NULL OR tt.track_value IS NOT NULL);
+        """
+        
+        result = conn.execute(text(sql), {
+            "upload_id": upload_id,
+            "field_name": field_name
+        })
+        total_diffs += result.rowcount
+    
+    # Сравнение полей из meta (JSONB) и соответствующих staging_catalog_v2 колонок
+    # Маппинг: staging_column -> meta_key (как оно хранится в track.meta)
+    meta_fields = [
+        ('track_number', 'track_number', "'track_number'"),
+        ('genre_name', 'genre', "'genre'"),
+        ('has_ringtone', 'has_ringtone', "'has_ringtone'"),
+        ('ringtone_upc', 'ringtone_upc', "'ringtone_upc'"),
+        ('ringtone_isrc', 'ringtone_isrc', "'ringtone_isrc'"),
+        ('has_vclip', 'has_vclip', "'has_vclip'"),
+        ('vclip_isrc', 'vclip_isrc', "'vclip_isrc'"),
+        ('video_upc', 'video_upc', "'video_upc'"),
+        ('has_lyrics', 'has_lyrics', "'has_lyrics'"),
+        ('has_ttml', 'has_ttml', "'has_ttml'"),
+        ('sales_start_date', 'sales_start_date', "'sales_start_date'"),
+    ]
+    
+    for staging_col, meta_field_name, meta_key in meta_fields:
+        sql = f"""
+        WITH target_track AS (
+            SELECT 
+                sc.id AS staging_id,
+                sc.track_id,
+                sc.track_name,
+                NULLIF(sc.{staging_col}, '') AS staging_value,
+                t.meta ->> {meta_key} AS track_value
+            FROM staging_catalog_v2 sc
+            LEFT JOIN track t ON sc.track_id::bigint = t.id
+            WHERE sc.track_id IS NOT NULL 
+              AND sc.upload_id = :upload_id
+        )
+        INSERT INTO staging_track_diff (
+            track_id, 
+            track_name, 
+            upload_id, 
+            field_name, 
+            old_value, 
+            new_value
+        )
+        SELECT 
+            tt.track_id::bigint,
+            tt.track_name,
+            :upload_id AS upload_id,
+            :field_name AS field_name,
+            COALESCE(tt.track_value, '') AS old_value,
+            COALESCE(tt.staging_value::text, '') AS new_value
+        FROM target_track tt
+        WHERE COALESCE(tt.staging_value::text, '') IS DISTINCT FROM COALESCE(tt.track_value, '')
+          AND (tt.staging_value IS NOT NULL OR tt.track_value IS NOT NULL);
+        """
+        
+        result = conn.execute(text(sql), {
+            "upload_id": upload_id,
+            "field_name": meta_field_name
+        })
+        total_diffs += result.rowcount
+    
+    elapsed = time.time() - t0
+    msg = f"✅ Найдено и сохранено отличий в базовой информации трека: {total_diffs} ({elapsed:.1f} сек)"
+    print(msg)
+    TaskProgress.emit(task_id, msg)
+    
+    return total_diffs
 
 
 def get_catalog_diff(conn: Connection, upload_id: Optional[str], label_id: int) -> List[Dict[str, Any]]:
@@ -536,7 +713,6 @@ def get_catalog_diff(conn: Connection, upload_id: Optional[str], label_id: int) 
     return rows
 
 
-
 def _sync_labels_v2(conn, upload_id, staging_table="staging_catalog_v2"):
     """1. ЗАПОЛНЯЕМ LABEL"""
     task_id = getattr(current_task.request, 'id', None)
@@ -567,6 +743,12 @@ def _sync_persons_v2(conn, upload_id, staging_table="staging_catalog_v2"):
     """2. ЗАПОЛНЯЕМ STAGING_PERSON (из 5-ти колонок)"""
     task_id = getattr(current_task.request, 'id', None)
     t0 = time.time()
+
+    conn.execute(
+        text("DELETE FROM staging_person WHERE upload_id = :upload_id"),
+        {"upload_id": upload_id}
+    )
+    
     result_persons = conn.execute(
         text(f"""
         WITH person_names AS (
@@ -762,7 +944,7 @@ def _sync_tracks_v2_isrc(conn, upload_id, staging_table="staging_catalog_v2"):
                     'sales_start_date', NULLIF(sc.sales_start_date, '')
                 ) AS meta
             FROM {staging_table} sc
-            WHERE  sc.isrc IS NOT NULL  AND sc.upload_id = :upload_id
+            WHERE  sc.isrc IS NOT NULL  AND sc.upload_id = :upload_id and sc.status = 'new'
                 AND NOT EXISTS (
                 SELECT 1 FROM track t2 
                 WHERE sc.isrc IS NOT NULL  AND t2.isrc = sc.isrc  AND t2.label_own_code = NULLIF(sc.right_id, '')
@@ -819,7 +1001,7 @@ def _sync_tracks_v2_label_code(conn, upload_id, staging_table="staging_catalog_v
                     'sales_start_date', NULLIF(sc.sales_start_date, '')
                 ) AS meta
             FROM {staging_table} sc
-            WHERE  sc.isrc IS NULL AND  sc.upload_id = :upload_id and NULLIF(sc.right_id, '') IS NOT NULL
+            WHERE  sc.isrc IS NULL AND  sc.upload_id = :upload_id and NULLIF(sc.right_id, '') IS NOT NULL and sc.status = 'new'
                 AND NOT EXISTS (
                 SELECT 1 FROM track t2 
                 WHERE (sc.isrc IS NULL ) 
@@ -1171,6 +1353,10 @@ def _cleanup_staging_v2(conn, upload_id, staging_table="staging_catalog_v2"):
         text("DELETE FROM staging_person WHERE upload_id = :uid"),
         {"uid": upload_id}
     )
+    conn.execute(
+        text("DELETE FROM staging_track_diff WHERE upload_id = :uid"),
+        {"uid": upload_id}
+    )
     elapsed = time.time() - t0
     print(f"🧹 Стейджинг v2 очищен для сессии {upload_id} ({elapsed:.1f} сек)")
     TaskProgress.emit(getattr(current_task.request, 'id', None), f"🧹 Стейджинг v2 очищен для сессии {upload_id} ({elapsed:.1f} сек)")
@@ -1260,6 +1446,49 @@ def _sync_track_rights_v1(conn, upload_id):
     return track_rights_count
 
 
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+
+
+def _update_tracks_common_info_from_staging(conn: Connection, upload_id: str) -> None:
+    """Обновляет основные поля трека (title, isrc, duration, explicit) и поле meta (jsonb) из staging_catalog_v2."""
+    query = text("""
+        UPDATE track t
+        SET 
+            title = COALESCE(NULLIF(c.track_name, ''), t.title),
+            isrc = COALESCE(NULLIF(c.isrc, ''), t.isrc),
+            duration = COALESCE(NULLIF(c.duration, ''), t.duration),
+            explicit = CASE 
+                WHEN c.explicit IS NULL OR c.explicit = '' THEN t.explicit
+                WHEN LOWER(c.explicit) IN ('true', '1', 't', 'yes') THEN TRUE
+                WHEN LOWER(c.explicit) IN ('false', '0', 'f', 'no') THEN FALSE
+                ELSE t.explicit
+            END,
+            meta = COALESCE(t.meta, '{}'::jsonb) || jsonb_strip_nulls(jsonb_build_object(
+                'genre', NULLIF(c.genre_name, ''),
+                'track_number', NULLIF(c.track_number, '')
+            ))
+        FROM (
+            SELECT DISTINCT ON (c.track_id)
+                c.track_id,
+                c.track_name,
+                c.isrc,
+                c.duration,
+                c.explicit,
+                c.genre_name,
+                c.track_number
+            FROM staging_catalog_v2 c
+            JOIN staging_track_diff d ON d.track_id = c.track_id
+            WHERE c.track_id IS NOT NULL 
+              AND d.upload_id = :upload_id
+        ) c
+        WHERE t.id = c.track_id;
+    """)
+    conn.execute(query, {"upload_id": upload_id})
+
 def create_catalog_upload(
     conn: Connection,
     upload_id: str,
@@ -1305,3 +1534,12 @@ def update_upload_status(conn: Connection, upload_id: str, status: str) -> None:
         WHERE upload_id = :upload_id
     """)
     conn.execute(query, {"upload_id": upload_id, "status": status})
+
+def refresh_track_materialized_views(conn: Connection) -> None:
+    TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Начинаем обновление представлений.") 
+    conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_extended; "))
+    conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights_prev; "))
+    conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights; "))
+       
+    print(f"🏁 Представления обновлены.")
+    TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Загружка каталога завершена полностью.")  

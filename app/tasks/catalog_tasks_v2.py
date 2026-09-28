@@ -3,17 +3,14 @@ import uuid
 from datetime import datetime
 
 from services.catalog_diff_service import (
-    get_catalog_diff, save_track_right_diff, update_staging_track_ids, save_track_contribution_diff,
-    update_staging_track_ids, save_track_contribution_diff, save_track_right_diff, 
-    get_catalog_diff, _sync_labels_v2, _sync_persons_v2, _insert_unique_persons_v2, 
-    _sync_right_holders_v2, _sync_releases_v2, _sync_tracks_v2_isrc,
-    _build_track_map_v2,_sync_track_releases_v2, _sync_track_contributions_v2, 
-    _sync_track_labels_v2, _sync_right_holders_v2, _sync_track_rights_v2,
-    _update_track_contributions_from_staging, _update_track_rights_from_staging,
-    _sync_right_holders_v1, _sync_track_rights_v1,
-    _sync_tracks_v2_label_code, _cleanup_staging_v2,
-    get_processing_upload_id, update_upload_status, create_catalog_upload
+    _build_track_map_v2, _cleanup_staging_v2, _insert_unique_persons_v2, _sync_labels_v2, _sync_persons_v2,
+    _sync_releases_v2, _sync_right_holders_v1, _sync_right_holders_v2, _sync_track_contributions_v2, _sync_track_labels_v2,
+    _sync_track_releases_v2, _sync_track_rights_v1, _sync_track_rights_v2, _sync_tracks_v2_isrc, _sync_tracks_v2_label_code,
+    _update_track_contributions_from_staging, _update_track_rights_from_staging, _update_tracks_common_info_from_staging, create_catalog_upload, find_track_contribution_diff,
+    find_track_right_diff, find_tracks_common_info_diff, get_catalog_diff, get_processing_upload_id, refresh_track_materialized_views, update_staging_track_ids,
+      update_upload_status, update_catalog_statistics
 )
+
 import polars as pl
 from polars import lit
 from sqlalchemy import create_engine, text
@@ -49,7 +46,7 @@ engine = create_engine(DATABASE_URL)
 # ===========================================================================
 
 @celery_app.task(name="process_catalog_file_v2", bind=True)
-def process_catalog_file_v2(self, file_path: str,  original_filename: str = "", label_id: int = None, user_id: int = None):
+def process_catalog_file_v2(self, file_path: str,  original_filename: str = "", label_id: int = None, user_id: int = None, is_additional_data: bool = True):
     task_id = self.request.id
     print(f"📂 Task process_catalog_file_v2[{self.request.id}] файл: {original_filename}")
     TaskProgress.emit(task_id, f"📂 Task process_catalog_file_v2[{self.request.id}] файл: {original_filename}")
@@ -67,11 +64,19 @@ def process_catalog_file_v2(self, file_path: str,  original_filename: str = "", 
             active_upload = get_processing_upload_id(conn, label_id)
 
             if active_upload:
-                raise RuntimeError(
-                    f"Для лейбла (ID: {label_id}) уже выполняется другая загрузка (upload_id: {active_upload})"
-                )    
+                if is_additional_data:
+                   
+                    print(f"Для лейбла (ID: {label_id}) выполняется дополнительная загрузка к сессии {active_upload}")
+                    upload_id = active_upload 
+                else:
+               
+                    raise RuntimeError(
+                        f"Для лейбла (ID: {label_id}) уже выполняется другая загрузка (upload_id: {active_upload}). "
+                        "Дождитесь окончания или отметьте 'Дополнительная загрузка'."
+                    )
+            else:
+              create_catalog_upload(conn, upload_id, label_id, user_id, original_filename)
 
-            create_catalog_upload(conn, upload_id, label_id, user_id, original_filename)
         
         df = pl.read_excel(file_path,infer_schema_length=0) 
         total_rows = len(df)
@@ -140,7 +145,7 @@ def process_catalog_file_v2(self, file_path: str,  original_filename: str = "", 
         raise e
         #return {"status": "error", "message": str(e)}
     finally:
-        # Если произошла ошибка (success == False), очищаем staging для этого upload_id
+      
         if not success:
             with engine.begin() as clean_conn:
                 clean_conn.execute(
@@ -243,14 +248,7 @@ def sync_catalog_dictionaries(self, prev_result, version="v2"):
                     "track_rights": track_rights_count
                 }
             }
-        with engine.begin() as conn:
-           TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Начинаем обновление представлений.") 
-           conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_extended; "))
-           conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights_prev; "))
-           conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights; "))
-       
-           print(f"🏁 Представления обновлены.")
-        TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Загружка каталога завершена полностью.")
+        #refresh_track_materialized_views(conn)
     except Exception as e:
         print(f"[v2] ❌ Ошибка заполнения справочников: {e}")
         TaskProgress.emit(task_id, f"[v2] ❌ Ошибка заполнения справочников: {e}")
@@ -264,12 +262,9 @@ def sync_catalog_dictionaries(self, prev_result, version="v2"):
 
 
 
-@celery_app.task(name="tasks.generate_catalog_diff", bind=True)
-def generate_catalog_diff_task(self, prev_result: dict, label_id: int) -> dict:
-    """
-    prev_result - это то, что вернула process_catalog_file_v2
-    Например: {"status": "success", "upload_id": "1234-5678", "total_rows": 100}
-    """
+@celery_app.task(name="tasks.find_catalog_diff", bind=True)
+def find_catalog_diff_task(self, prev_result: dict, label_id: int) -> dict:
+ 
     
     # 1. Достаем upload_id из результата первой задачи
     upload_id = prev_result.get("upload_id")
@@ -280,61 +275,102 @@ def generate_catalog_diff_task(self, prev_result: dict, label_id: int) -> dict:
     # 2. Вызываем саму логику расчета диффа
     with engine.begin() as conn:
 
-        save_track_contribution_diff(conn, upload_id, task_id=getattr(self.request, 'id', None))
-        save_track_right_diff(conn, upload_id, task_id=getattr(self.request, 'id', None))
+        find_track_contribution_diff(conn, upload_id, task_id=getattr(self.request, 'id', None))
+        find_track_right_diff(conn, upload_id, task_id=getattr(self.request, 'id', None))
+        find_tracks_common_info_diff(conn, upload_id, task_id=getattr(self.request, 'id', None))
 
         # 3. Собираем данные по изменившимся трекам (old/new) для проверки пользователем
         diff_rows = get_catalog_diff(conn, upload_id, label_id=label_id)
+        result_stats = update_catalog_statistics(conn, upload_id, task_id=getattr(self.request, 'id', None))
 
     return {
         "status": "completed",
         "upload_id": upload_id,
         "label_id": label_id,
         "total_diff_rows": len(diff_rows) // 2,
-        "diff": diff_rows
+        "diff": diff_rows,
+        "stats": result_stats
     }
 
 
-@celery_app.task(name="sync_catalog_dictionaries_for_update", bind=True)
-def sync_catalog_dictionaries_for_update(self, prev_result, version="v2"):
+@celery_app.task(name="update_catalog_step_1_prepare_data", bind=True)
+def update_catalog_step_1_prepare_data(self, prev_result, version="v2"):
     upload_id = prev_result.get("upload_id") if isinstance(prev_result, dict) else prev_result
     task_id = getattr(self.request, 'id', None)
     success = False
     staging_table = "staging_catalog_v2"
     try:
-     
-        # Phase 3: Основная синхронизация
         with engine.begin() as conn:
             print("📋 [v2] Начинаем синхронизацию справочников...")
             TaskProgress.emit(task_id, "📋 [v2] Начинаем синхронизацию справочников...")
             labels_count = _sync_labels_v2(conn, upload_id, staging_table=staging_table)
             persons_staging_count = _sync_persons_v2(conn, upload_id, staging_table=staging_table)
 
-            # Phase 2: Нормализация 
+          
             from .report_tasks import normalize_person_data, normalize_data
             print("📋 [v2] Нормализация staging_person...")
             TaskProgress.emit(task_id, "📋 [v2] Нормализация staging_person...")
             normalize_person_data("staging_person", "full_name", "tokens", "full_name_norm_key", connection=conn)
+
             print("📋 [v2] Нормализация staging_catalog_v2.track_name...")
             TaskProgress.emit(task_id, "📋 [v2] Нормализация staging_catalog_v2.track_name...")
-
             normalize_data("staging_catalog_v2", "track_name", connection=conn)
 
-            persons_count = _insert_unique_persons_v2(conn, upload_id)
-            #rights_count = _sync_right_holders_v2(conn, upload_id)
+            
         
-            releases_count = _sync_releases_v2(conn, upload_id, staging_table=staging_table)
-
-            #Inportant diff between processing tracks
-            # обновляет стеджинг, чтобы знать кто есть уже в таблице track
             update_staging_track_ids(conn, upload_id, task_id=getattr(self.request, 'id', None))
 
 
 
             
-            # todo : нужно пометить треки, как новые или обновлённые, перед синхронизацией
-            # в таблице track добавить флаг - 
-            # или писать в staging_track_diff
+            success = True
+
+            return {
+                "status": "success",
+                "upload_id": upload_id,
+                "stats": {
+                    "labels": labels_count,
+                    "persons_staging": persons_staging_count,
+        
+                }
+            }
+          
+    except Exception as e:
+        print(f"[v2] ❌ Ошибка заполнения справочников  step 1: {e}")
+        TaskProgress.emit(task_id, f"[v2] ❌ Ошибка заполнения справочников step 1: {e}")
+        return {"status": "error", "message": str(e)}
+
+    finally:
+        if not success:
+            with engine.begin() as clean_conn:
+                _cleanup_staging_v2(clean_conn, upload_id, staging_table=staging_table)
+            TaskProgress.emit(task_id, "🧹 Staging очищен после ошибки")
+
+
+
+
+
+@celery_app.task(name="update_catalog_step_2_new_tracks", bind=True)
+def update_catalog_step_2_new_tracks(self, label_id=None):
+    upload_id = None
+    task_id = getattr(self.request, 'id', None)
+    success = False
+    staging_table = "staging_catalog_v2"
+    try:
+     
+        with engine.begin() as conn:
+            if label_id is not None:
+                active_upload = get_processing_upload_id(conn, label_id)
+                if active_upload:
+                    upload_id = active_upload
+            print("📋 Начинаем загрузку новых треков в справочники..")
+            TaskProgress.emit(task_id, "📋 Начинаем загрузку новых треков в справочники...")
+                       
+            persons_count = _insert_unique_persons_v2(conn, upload_id)
+            releases_count = _sync_releases_v2(conn, upload_id, staging_table=staging_table)
+
+            
+            #new tracks
             tracks_count_isrc = _sync_tracks_v2_isrc(conn, upload_id, staging_table=staging_table)   
             tracks_count_code = _sync_tracks_v2_label_code(conn, upload_id, staging_table=staging_table)
            
@@ -344,15 +380,13 @@ def sync_catalog_dictionaries_for_update(self, prev_result, version="v2"):
             track_release_count = _sync_track_releases_v2(conn, upload_id, staging_table=staging_table)
             contributions_count = _sync_track_contributions_v2(conn, upload_id)
 
-            #track_rights_count = _sync_track_rights_v2(conn, upload_id)
+    
             _sync_track_labels_v2(conn, upload_id, staging_table=staging_table)
 
-            if version == "v2":
-                rights_count = _sync_right_holders_v2(conn, upload_id, staging_table=staging_table)
-                track_rights_count = _sync_track_rights_v2(conn, upload_id, staging_table=staging_table)
-            else:
-                rights_count = _sync_right_holders_v1(conn, upload_id)
-                track_rights_count = _sync_track_rights_v1(conn, upload_id)
+          
+            rights_count = _sync_right_holders_v2(conn, upload_id, staging_table=staging_table)
+            track_rights_count = _sync_track_rights_v2(conn, upload_id, staging_table=staging_table)
+        
 
             #_sync_track_labels_v2(conn, upload_id, staging_table=staging_table)
 
@@ -368,8 +402,6 @@ def sync_catalog_dictionaries_for_update(self, prev_result, version="v2"):
                 "status": "success",
                 "upload_id": upload_id,
                 "stats": {
-                    "labels": labels_count,
-                    "persons_staging": persons_staging_count,
                     "persons": persons_count,
                     "right_holders": rights_count,
                     "releases": releases_count,
@@ -379,14 +411,7 @@ def sync_catalog_dictionaries_for_update(self, prev_result, version="v2"):
                     "track_rights": track_rights_count
                 }
             }
-        with engine.begin() as conn:
-           TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Начинаем обновление представлений.") 
-          #conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_extended; "))
-           #conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights_prev; "))
-           #conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights; "))
-       
-           print(f"🏁 Представления обновлены.")
-        TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Загружка каталога завершена полностью.")
+            #refresh_track_materialized_views(conn) 
     except Exception as e:
         print(f"[v2] ❌ Ошибка заполнения справочников: {e}")
         TaskProgress.emit(task_id, f"[v2] ❌ Ошибка заполнения справочников: {e}")
@@ -398,28 +423,26 @@ def sync_catalog_dictionaries_for_update(self, prev_result, version="v2"):
                 _cleanup_staging_v2(clean_conn, upload_id, staging_table=staging_table)
             TaskProgress.emit(task_id, "🧹 Staging очищен после ошибки")
 
-
-@celery_app.task(name="sync_catalog_dictionaries_save_changes", bind=True)
-def sync_catalog_dictionaries_save_changes(self, label_id):
-    #upload_id = prev_result.get("upload_id") if isinstance(prev_result, dict) else prev_result
-    upload_id = None
+@celery_app.task(name="update_catalog_save_changes", bind=True)
+def update_catalog_save_changes(self, prev_result, label_id):
+    upload_id = prev_result.get("upload_id") if isinstance(prev_result, dict) else prev_result
+    #upload_id = None
     task_id = getattr(self.request, 'id', None)
     success = False
     staging_table = "staging_catalog_v2"
     try:
-     
-        # Phase 3: Основная синхронизация
-        with engine.begin() as conn:
 
-            if label_id is not None:
+        with engine.begin() as conn:
+            if label_id is not None and upload_id is None:
                 active_upload = get_processing_upload_id(conn, label_id)
                 if active_upload:
                     upload_id = active_upload
             contributions_count = _update_track_contributions_from_staging(conn, upload_id)
             track_rights_count = _update_track_rights_from_staging(conn, upload_id)
+            track_common_info_count = _update_tracks_common_info_from_staging(conn, upload_id)
 
             update_upload_status(conn, upload_id, "COMPLETED")
-            #_cleanup_staging_v2(conn, upload_id, staging_table=staging_table)
+            _cleanup_staging_v2(conn, upload_id, staging_table=staging_table)
             print(f"🧹 Staging очищен после синхронизации.")
        
             success = True
@@ -430,17 +453,11 @@ def sync_catalog_dictionaries_save_changes(self, label_id):
                 "stats": {
         
                     "track_contributions": contributions_count,
-                    "track_rights": track_rights_count
+                    "track_rights": track_rights_count,
+                    "track_common_info": track_common_info_count
                 }
             }
-        with engine.begin() as conn:
-           TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Начинаем обновление представлений.") 
-          #conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_extended; "))
-           #conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights_prev; "))
-           #conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights; "))
-       
-           print(f"🏁 Представления обновлены.")
-        TaskProgress.emit(getattr(current_task.request, 'id', None), f"✅ Загружка каталога завершена полностью.")
+            #refresh_track_materialized_views(conn)
     except Exception as e:
         print(f"[v2] ❌ Ошибка заполнения справочников: {e}")
         TaskProgress.emit(task_id, f"[v2] ❌ Ошибка заполнения справочников: {e}")
@@ -456,14 +473,71 @@ def sync_catalog_dictionaries_save_changes(self, label_id):
 def get_catalog_diff_by_label_task(self,  label_id: int) -> dict:
 
     upload_id = None
+    task_id = getattr(self.request, 'id', None)
     with engine.begin() as conn:
 
         diff_rows = get_catalog_diff(conn, upload_id, label_id=label_id)
+        
+        # Получаем активную загрузку для этого лейбла и подсчитываем статистику
+        if not upload_id:
+            active_upload = get_processing_upload_id(conn, label_id)
+            if active_upload:
+                upload_id = active_upload
+        
+        result_stats = {}
+        if upload_id:
+            result_stats = update_catalog_statistics(conn, upload_id, task_id=task_id)
 
     return {
         "status": "completed",
         "upload_id": upload_id,
         "label_id": label_id,
         "total_diff_rows": len(diff_rows) // 2,
-        "diff": diff_rows
-    }            
+        "diff": diff_rows,
+        "stats": result_stats
+    }   
+
+
+
+@celery_app.task(name="update_catalog_delete_changes", bind=True)
+def update_catalog_delete_changes(self, label_id):
+
+    upload_id = None
+    task_id = getattr(self.request, 'id', None)
+    success = False
+    staging_table = "staging_catalog_v2"
+    try:
+        with engine.begin() as conn:
+
+            if label_id is not None:
+                active_upload = get_processing_upload_id(conn, label_id)
+                if active_upload:
+                    upload_id = active_upload
+          
+            # Получаем статистику перед удалением
+            result_stats = {}
+            if upload_id:
+                result_stats = update_catalog_statistics(conn, upload_id, task_id=task_id)
+            
+            update_upload_status(conn, upload_id, "DELETED")
+            _cleanup_staging_v2(conn, upload_id, staging_table=staging_table)
+            print(f"🧹 Staging очищен после синхронизации.")
+       
+            success = True
+            return {
+                "status": "success",
+                "upload_id": upload_id,
+                "stats": result_stats
+            }
+        #refresh_track_materialized_views(conn)
+        TaskProgress.emit(task_id, f"✅ Удаление предварительных данных каталога завершена полностью.")
+    except Exception as e:
+        print(f"[v2] ❌ Ошибка заполнения справочников: {e}")
+        TaskProgress.emit(task_id, f"[v2] ❌ Ошибка заполнения справочников: {e}")
+        return {"status": "error", "message": str(e)}
+
+    finally:
+        if not success:
+            with engine.begin() as clean_conn:
+                _cleanup_staging_v2(clean_conn, upload_id, staging_table=staging_table)
+            TaskProgress.emit(task_id, "🧹 Staging очищен после ошибки")
