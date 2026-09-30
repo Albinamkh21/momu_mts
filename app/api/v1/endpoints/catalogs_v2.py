@@ -5,7 +5,9 @@ from uuid import uuid4
 from celery import chain
 from celery.result import AsyncResult
 from core.celery_app import celery_app
-from tasks.catalog_tasks_v2 import find_catalog_diff_task, get_catalog_diff_by_label_task, process_catalog_file_v2, sync_catalog_dictionaries, update_catalog_delete_changes,  update_catalog_save_changes, update_catalog_step_1_prepare_data, update_catalog_step_2_new_tracks
+from tasks.catalog_tasks_v2 import ( find_catalog_diff_task, get_catalog_deleted_task, get_catalog_diff_by_label_task, 
+                                    process_catalog_file_v2, sync_catalog_dictionaries, update_catalog_delete_changes,  update_catalog_save_changes,
+                                      update_catalog_step_1_prepare_data, update_catalog_step_2_new_tracks )
 from api.deps import get_current_user, User, Depends
 
 router = APIRouter()
@@ -60,12 +62,12 @@ async def recalculate_diff(file: UploadFile = File(...),
         raise HTTPException(status_code=401, detail="Unauthorized")
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-
+    upload_id = str(uuid4())
     workflow = chain(
        
-        process_catalog_file_v2.s(file_path, original_filename=file.filename, label_id=label_id, user_id=current_user.id, is_additional_data=is_additional_data), 
-        update_catalog_step_1_prepare_data.s("v2"),
-        find_catalog_diff_task.s(label_id=label_id)
+        process_catalog_file_v2.s(file_path, upload_id=upload_id, original_filename=file.filename, label_id=label_id, user_id=current_user.id, is_additional_data=is_additional_data), 
+        update_catalog_step_1_prepare_data.s("v2", upload_id=upload_id),
+        find_catalog_diff_task.s(label_id=label_id, upload_id=upload_id)
       
     )
 
@@ -151,7 +153,6 @@ async def download_catalog_diff(label_id: int):
     workflow = chain(
         get_catalog_diff_by_label_task.s(label_id)
     )
-
     task_result = workflow.apply_async()
 
 
@@ -166,9 +167,8 @@ async def download_catalog_diff(label_id: int):
 async def get_catalog_deleted(label_id: int):
    
     workflow = chain(
-        get_catalog_diff_by_label_task.s(label_id)
+        get_catalog_deleted_task.s(label_id)
     )
-
     task_result = workflow.apply_async()
 
 

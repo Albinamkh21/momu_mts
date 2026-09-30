@@ -328,6 +328,150 @@ def export_normalized_catalog_to_flat(self, output_path: str = None, label_id: i
 def delete_data_from_all_dictionaries_by_label(self, label_id: int):
     """
     Удаляет все данные о треках, связях и правах, привязанных к указанному лейблу.
+    Базовые справочники остаются нетронутыми.
+    """
+    try:
+        task_id = self.request.id
+        with engine.begin() as conn:
+            # 1. Создаем временную таблицу для целевых треков
+            conn.execute(text("CREATE TEMP TABLE tmp_target_tracks (track_id INT PRIMARY KEY) ON COMMIT DROP;"))
+            
+            # 2. Заполняем ее треками нашего лейбла
+            conn.execute(text("""
+                INSERT INTO tmp_target_tracks (track_id)
+                SELECT track_id FROM track_label WHERE label_id = :label_id
+            """), {"label_id": label_id})
+
+            total_tracks = conn.execute(text("SELECT COUNT(*) FROM tmp_target_tracks")).scalar()
+
+            if total_tracks == 0:
+                TaskProgress.emit(task_id, "🗑️ Нет треков для данного лейбла")
+                return {"status": "success", "label_id": label_id, "message": "Нет треков для данного лейбла", "deleted": {}}
+
+            print(f"🗑️ Найдено треков для удаления: {total_tracks}")
+            TaskProgress.emit(task_id, f"🗑️ Найдено треков для удаления: {total_tracks}")
+
+            # 3. Удаляем track_label (все связи этих треков для текущего лейбла)
+            r_track_label = conn.execute(text("""
+                DELETE FROM track_label 
+                WHERE label_id = :label_id 
+                  AND track_id IN (SELECT track_id FROM tmp_target_tracks)
+            """), {"label_id": label_id})
+            
+            print(f"✅ track_label удалено: {r_track_label.rowcount}")
+            TaskProgress.emit(task_id, f"✅ track_label удалено: {r_track_label.rowcount}")
+
+            # 4. Определяем осиротевшие треки и записываем во вторую временную таблицу
+            conn.execute(text("CREATE TEMP TABLE tmp_orphan_tracks (track_id INT PRIMARY KEY) ON COMMIT DROP;"))
+            conn.execute(text("""
+                INSERT INTO tmp_orphan_tracks (track_id)
+                SELECT t.track_id 
+                FROM tmp_target_tracks t
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM track_label tl WHERE tl.track_id = t.track_id
+                )
+            """))
+
+            orphan_tracks_count = conn.execute(text("SELECT COUNT(*) FROM tmp_orphan_tracks")).scalar()
+            TaskProgress.emit(task_id, f"✅ Найдено осиротевших треков: {orphan_tracks_count}")
+
+            # 5. Удаляем report
+            r_report = conn.execute(text("""
+                DELETE FROM report_track_rights_cache 
+                WHERE track_id IN (SELECT track_id FROM tmp_orphan_tracks)
+            """))
+            print(f"✅ report удалено: {r_report.rowcount}")
+            TaskProgress.emit(task_id, f"✅ report удалено: {r_report.rowcount}")
+
+            # 6. Удаляем track_right
+            r_track_right = conn.execute(text("""
+                DELETE FROM track_right 
+                WHERE track_id IN (SELECT track_id FROM tmp_orphan_tracks)
+                  AND right_holder_id IN (SELECT id FROM right_holder WHERE label_id = :label_id)
+            """), {"label_id": label_id})
+            print(f"✅ track_right удалено: {r_track_right.rowcount}")
+            TaskProgress.emit(task_id, f"✅ track_right удалено: {r_track_right.rowcount}")
+
+            # 7. Удаляем track_contribution
+            r_track_contribution = conn.execute(text("""
+                DELETE FROM track_contribution 
+                WHERE track_id IN (SELECT track_id FROM tmp_orphan_tracks)
+            """))
+            print(f"✅ track_contribution удалено: {r_track_contribution.rowcount}")
+            TaskProgress.emit(task_id, f"✅ track_contribution удалено: {r_track_contribution.rowcount}")
+
+            # 8. Удаляем track_release
+            r_track_release = conn.execute(text("""
+                DELETE FROM track_release 
+                WHERE track_id IN (SELECT track_id FROM tmp_orphan_tracks)
+            """))
+            print(f"✅ track_release удалено: {r_track_release.rowcount}")
+            TaskProgress.emit(task_id, f"✅ track_release удалено: {r_track_release.rowcount}")
+
+            # 9. Удаляем сами треки
+            r_tracks = conn.execute(text("""
+                DELETE FROM track 
+                WHERE id IN (SELECT track_id FROM tmp_orphan_tracks)
+            """))
+            print(f"✅ track удалено: {r_tracks.rowcount}")
+            TaskProgress.emit(task_id, f"✅ track удалено: {r_tracks.rowcount}")
+
+            # 10. Удаляем осиротевшие релизы
+            r_releases = conn.execute(text("""
+                DELETE FROM release r
+                WHERE r.label_id = :label_id
+                AND NOT EXISTS (
+                    SELECT 1 FROM track_release tr WHERE tr.release_id = r.id
+                )
+            """), {"label_id": label_id})
+            print(f"✅ release (осиротевших) удалено: {r_releases.rowcount}")
+            TaskProgress.emit(task_id, f"✅ release (осиротевших) удалено: {r_releases.rowcount}")
+
+            # 11. Удаляем осиротевших артистов
+            r_persons = conn.execute(text("""
+                DELETE FROM person p
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM track_contribution tc WHERE tc.person_id = p.id 
+                )
+            """))
+            print(f"✅ person (осиротевших) удалено: {r_persons.rowcount}")
+            TaskProgress.emit(task_id, f"✅ person (осиротевших) удалено: {r_persons.rowcount}")
+
+            
+
+            stats = {
+                "tracks": r_tracks.rowcount,
+                "reports": r_report.rowcount,
+                "track_rights": r_track_right.rowcount,
+                "track_contributions": r_track_contribution.rowcount,
+                "track_releases": r_track_release.rowcount,
+                "track_labels": r_track_label.rowcount,
+                "releases": r_releases.rowcount,
+                "persons": r_persons.rowcount
+            }
+
+        with engine.begin() as conn:
+            TaskProgress.emit(task_id, "✅ Начинаем обновление представлений.") 
+            # conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_extended; "))
+            # conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights_prev; "))
+            # conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights; "))
+            print("🏁 Представления обновлены.")
+            TaskProgress.emit(task_id, "✅ Представления обновлены.")
+
+        print(f"🏁 Удаление по лейблу {label_id} завершено: {stats}")
+        TaskProgress.emit(task_id, f"🏁 Удаление по лейблу {label_id} завершено: {stats}")
+        return {"status": "success", "label_id": label_id, "deleted": stats}
+
+    except Exception as e:
+        print(f"❌ Ошибка удаления по лейблу: {e}")
+        TaskProgress.emit(self.request.id, f"❌ Ошибка удаления по лейблу: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@celery_app.task(name="delete_data_from_all_dictionaries_by_label", bind=True)
+def delete_data_from_all_dictionaries_by_label_old(self, label_id: int):
+    """
+    Удаляет все данные о треках, связях и правах, привязанных к указанному лейблу.
     Базовые справочники (label,  right_category,
     right_usage_type, finding_source, partners, contract) остаются нетронутыми.
     """

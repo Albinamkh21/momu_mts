@@ -1245,7 +1245,7 @@ def normalize_person_data(table_name="person", column_name="full_name",
         if not _re_val.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', norm_key_col):
             return {"status": "error", "message": f"Invalid norm_key_col: {norm_key_col}"}
 
-        chunk_size = 50000
+        chunk_size = 100000
         total_updated = 0
         last_id = 0
 
