@@ -54,3 +54,23 @@ export const getCatalogDiffColumns = () => [
   diffColumn('related_right_id_pub', 'Смежное право PUB', { width: 140 }),
   diffColumn('rr_label_treaty_number', 'Правообладатель (смежн.)', { flex: 1 }),
 ];
+
+export const getCatalogDeletedColumns = () => [
+  {
+    field: 'diff_type',
+    headerName: '',
+    width: 100,
+    pinned: 'left',
+    sortable: false,
+    filter: false,
+    cellRenderer: () => {
+      // Используем тот же класс, что и для "Было", чтобы бейдж был красным/серым
+      return <span className="diff-row-badge diff-row-badge--old">Удалён</span>;
+    },
+  },
+  diffColumn('id', 'ID трека', { pinned: 'left', width: 100 }),
+  diffColumn('isrc', 'ISRC', { width: 110 }),
+  diffColumn('label_own_code', 'Код лейбла', { flex: 1 }),
+  diffColumn('title', 'Название трека', { flex: 1.4, minWidth: 180 }),
+  
+];

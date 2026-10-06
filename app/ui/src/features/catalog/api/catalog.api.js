@@ -1,10 +1,11 @@
   import { httpClient } from '../../../api/httpClient';
 
-  // Upload catalog (v2)
-  export const uploadCatalogV2 = async (file, user_id) => {
+  export const uploadCatalogV2 = async (file, labelId) => {
+
     const formData = new FormData();
     formData.append('file', file);
-    if (user_id) formData.append('user_id', user_id);
+    formData.append('label_id', labelId);
+
     const { data } = await httpClient.post('/v1/catalog_v2/upload_v2', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
@@ -95,15 +96,26 @@ export const deleteCatalogDiff = async (labelId) => {
   return data;
 };
 
-// Сохранение diff в файл
-export const downloadCatalogDiff = async (labelId) => {
-  const { data } = await httpClient.get(`/v1/catalog_v2/download_catalog_diff/${labelId}`);
-  return data;
-};
-
 // Получение удалённых треков по лейблу
 export const getCatalogDeleted = async (labelId) => {
   const { data } = await httpClient.get(`/v1/catalog_v2/get_catalog_deleted/${labelId}`);
+  return data;
+};
+
+// Единая выгрузка каталога в файл (CSV): type = 'changed' | 'deleted'
+export const exportCatalog = async (labelId, type) => {
+  return httpClient.get(`/v1/catalog_v2/export_catalog/${labelId}`, {
+    params: { type },
+    responseType: 'blob',
+  });
+};
+
+export const updateViews = async (labelId) => {
+  const params = new URLSearchParams();
+  params.append('label_id', parseInt(labelId));
+  const { data } = await httpClient.post('/v1/catalog_v2/update_views', params, {
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  });
   return data;
 };
 

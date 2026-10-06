@@ -18,7 +18,7 @@ import sys
 # upc/album_name/album_single в нормализованных таблицах не хранятся -> для old всегда None.
 CATALOG_ROW_FIELDS = [
     "track_id", "right_id", "upc", "isrc", "track_name", "genre_name",
-    "album_name", "album_single", "track_number", "artist_name",
+    "album_name", "release_date", "album_single", "track_number", "artist_name",
     "track_artist_name", "composer", "lyricist", "authors",
     "explicit", "duration", "label_name",
     "author_right_int", "author_right_mob", "author_right_pub", "ar_label_treaty_number",
@@ -36,6 +36,7 @@ DIFF_FIELD_TO_COLUMNS = {
         "author_right_int", "author_right_mob", "author_right_pub", "ar_label_treaty_number",
         "related_right_id_int", "related_right_id_mob", "related_right_id_pub", "rr_label_treaty_number",
     ],
+    "release": ["upc", "album_name", "release_date", "label_name"], 
 }
 
 
@@ -124,7 +125,7 @@ def update_catalog_statistics(conn, upload_id: str, task_id: str) -> dict:
 
 
 
-def find_track_contribution_diff(conn, upload_id: str, task_id: str):
+def find_track_contribution_diff(conn, upload_id: str,  label_id: int, task_id: str):
     t0 = time.time()
     msg = f"Starting track contribution diff for upload_id: {upload_id}"
     print(msg)
@@ -279,7 +280,7 @@ def find_track_contribution_diff(conn, upload_id: str, task_id: str):
     return total_diffs
 
 
-def find_track_right_diff(conn, upload_id: str, task_id: str):
+def find_track_right_diff(conn, upload_id: str,  label_id: int, task_id: str):
     TaskProgress.emit(upload_id, f" Starting track right diff for upload_id: {upload_id}")
     print(f"  Starting track right diff for upload_id: {upload_id}")
     
@@ -315,7 +316,7 @@ def find_track_right_diff(conn, upload_id: str, task_id: str):
             v.cat_code,
             v.usage_code,
             v.holder_name,
-            v.share_str::numeric(5,2) AS share_percentage
+            REPLACE(v.share_str, ',', '.')::numeric(5,2) AS share_percentage
         FROM target_track tt
         CROSS JOIN LATERAL (
             VALUES 
@@ -327,7 +328,7 @@ def find_track_right_diff(conn, upload_id: str, task_id: str):
                 ('Related', 'PUB', tt.rr_label_treaty_number, tt.related_right_id_pub)
         ) AS v(cat_code, usage_code, holder_name, share_str)
         WHERE (v.holder_name IS NOT NULL AND v.holder_name != '')
-           OR (v.share_str IS NOT NULL AND v.share_str != '')
+             AND (v.share_str IS NOT NULL AND v.share_str != '' AND REPLACE(v.share_str, ',', '.')::numeric(5,2) > 0)
     ),
 
     -- 2. Прямые JOIN со справочниками (без LOWER/UPPER)
@@ -343,7 +344,7 @@ def find_track_right_diff(conn, upload_id: str, task_id: str):
         FROM raw_new_rights rnr
         JOIN right_category rc ON rc.name = rnr.cat_code
         JOIN right_usage_type rut ON rut.code = rnr.usage_code
-        LEFT JOIN right_holder rh ON rh.name = rnr.holder_name
+        JOIN right_holder rh ON rh.name = rnr.holder_name AND rh.label_id = :label_id
     ),
     new_rights AS (
         SELECT 
@@ -368,7 +369,8 @@ def find_track_right_diff(conn, upload_id: str, task_id: str):
         JOIN track_right tr ON tr.track_id = tt.track_id 
         JOIN right_category rc ON rc.id = tr.right_category_id
         JOIN right_usage_type rut ON rut.id = tr.right_usage_type_id
-        LEFT JOIN right_holder rh ON rh.id = tr.right_holder_id
+        JOIN right_holder rh ON rh.id = tr.right_holder_id and rh.label_id = :label_id
+        where tr.share_percentage > 0
     ),
     old_rights AS (
         SELECT 
@@ -403,7 +405,7 @@ def find_track_right_diff(conn, upload_id: str, task_id: str):
     """
     
     # Выполнение запроса
-    result = conn.execute(text(sql), {"upload_id": upload_id})
+    result = conn.execute(text(sql), {"upload_id": upload_id, "label_id": label_id})
     
     TaskProgress.emit(upload_id, "Finished track update in staging_catalog_v2")
     print("Finished track update in staging_catalog_v2")
@@ -411,7 +413,7 @@ def find_track_right_diff(conn, upload_id: str, task_id: str):
     return result.rowcount
 
 
-def find_tracks_common_info_diff(conn, upload_id: str, task_id: str):
+def find_tracks_common_info_diff(conn, upload_id: str,  label_id: int, task_id: str):
     """
     Сравнивает базовую информацию о треках между staging_catalog_v2 и track таблицей.
     Проверяет различия в:
@@ -551,6 +553,91 @@ def find_tracks_common_info_diff(conn, upload_id: str, task_id: str):
     
     return total_diffs
 
+def find_release_diff(conn, upload_id: str, task_id: str):
+    """
+    Сравнивает информацию о релизе (альбоме) для существующих треков:
+    - upc
+    - album_name (title)
+    - release_date
+    - label_name (через label_id)
+    Пишет в staging_track_diff с field_name='release'.
+    """
+    TaskProgress.emit(upload_id, f"Starting release diff for upload_id: {upload_id}")
+    print(f"Starting release diff for upload_id: {upload_id}")
+
+    t0 = time.time()
+
+    conn.execute(text("""
+        DELETE FROM staging_track_diff
+        WHERE upload_id = :upload_id AND field_name = 'release';
+    """), {"upload_id": upload_id})
+
+    sql = """
+    WITH target_track AS (
+        SELECT DISTINCT ON (sc.track_id)
+            sc.id AS staging_id,
+            sc.track_id,
+            sc.track_name,
+            NULLIF(sc.upc, '')                          AS new_upc,
+            COALESCE(NULLIF(sc.album_name, ''), '')     AS new_album_name,
+            NULLIF(sc.release_date, '')                 AS new_release_date,
+            l.id                                        AS new_label_id,
+            NULLIF(sc.label_name, '')                   AS new_label_name
+        FROM staging_catalog_v2 sc
+        LEFT JOIN label l ON l.name = sc.label_name
+        WHERE sc.track_id IS NOT NULL
+          AND sc.upload_id = :upload_id
+        ORDER BY sc.track_id, sc.id DESC
+    ),
+
+    old_release AS (
+        SELECT DISTINCT ON (tr.track_id)
+            tr.track_id,
+            r.upc              AS old_upc,
+            r.title            AS old_album_name,
+            r.release_date     AS old_release_date,
+            r.label_id         AS old_label_id,
+            l.name             AS old_label_name
+        FROM track_release tr
+        JOIN release r ON r.id = tr.release_id
+        LEFT JOIN label l ON l.id = r.label_id
+        WHERE tr.track_id IN (
+            SELECT track_id FROM target_track
+        )
+        ORDER BY tr.track_id, tr.release_id
+    ),
+
+    compare AS (
+        SELECT
+            tt.track_id,
+            tt.track_name,
+            -- old: собрали всё в одну строку-ключ и в одну "читаемую" строку
+            COALESCE(o.old_upc, '') || '|' ||
+            COALESCE(o.old_album_name, '') || '|' ||
+            COALESCE(o.old_release_date::text, '') || '|' ||
+            COALESCE(o.old_label_name, '')            AS old_full,
+            -- new
+            COALESCE(tt.new_upc, '') || '|' ||
+            COALESCE(tt.new_album_name, '') || '|' ||
+            COALESCE(tt.new_release_date, '') || '|' ||
+            COALESCE(tt.new_label_name, '')           AS new_full
+        FROM target_track tt
+        LEFT JOIN old_release o ON o.track_id = tt.track_id
+    )
+
+    INSERT INTO staging_track_diff (track_id, track_name, upload_id, field_name, old_value, new_value)
+    SELECT track_id, track_name, :upload_id, 'release', old_full, new_full
+    FROM compare
+    WHERE old_full IS DISTINCT FROM new_full;
+    """
+
+    result = conn.execute(text(sql), {"upload_id": upload_id})
+    count = result.rowcount
+    elapsed = time.time() - t0
+    msg = f"✅ Найдено отличий в релизах: {count} ({elapsed:.1f} сек)"
+    print(msg)
+    TaskProgress.emit(upload_id, msg)
+    return count
 
 def get_catalog_diff(conn: Connection, upload_id: Optional[str], label_id: int) -> List[Dict[str, Any]]:
     """
@@ -686,15 +773,27 @@ def get_catalog_diff(conn: Connection, upload_id: Optional[str], label_id: int) 
                 WHERE tl.track_id = ANY(:track_ids)
                   AND (:label_id IS NULL OR tl.label_id = :label_id)
                 ORDER BY tl.track_id, tl.id
+            ),
+                old_release AS (                    -- НОВОЕ
+            SELECT DISTINCT ON (tr.track_id)
+                tr.track_id,
+                r.upc              AS upc,
+                r.title            AS album_name,
+                r.release_date     AS release_date
+            FROM track_release tr
+            JOIN release r ON r.id = tr.release_id
+            WHERE tr.track_id = ANY(:track_ids)
+            ORDER BY tr.track_id, tr.release_id
             )
             SELECT
                 t.id AS track_id,
                 t.label_own_code AS right_id,
-                NULL::text AS upc,
+                r.upc              AS upc,
                 t.isrc,
                 t.title AS track_name,
                 t.meta ->> 'genre' AS genre_name,
-                NULL::text AS album_name,
+                r.album_name   AS album_name,
+                r.release_date     AS release_date,
                 NULL::text AS album_single,
                 t.meta ->> 'track_number' AS track_number,
                 oc.artist_name,
@@ -714,6 +813,7 @@ def get_catalog_diff(conn: Connection, upload_id: Optional[str], label_id: int) 
                 orr.related_right_id_pub,
                 orr.rr_label_treaty_number
             FROM track t
+            LEFT JOIN old_release r ON r.track_id = t.id
             LEFT JOIN old_contrib oc ON oc.track_id = t.id
             LEFT JOIN old_rights orr ON orr.track_id = t.id
             LEFT JOIN old_label ol ON ol.track_id = t.id
@@ -741,6 +841,7 @@ def get_catalog_diff(conn: Connection, upload_id: Optional[str], label_id: int) 
             for d in track_diffs
             for col in DIFF_FIELD_TO_COLUMNS.get(d["field_name"], [d["field_name"]])
         })
+       
 
         for row_type, values_by_track in (("old", old_by_track), ("new", new_by_track)):
             row = {field: None for field in CATALOG_ROW_FIELDS}
@@ -908,7 +1009,7 @@ def _sync_right_holders_v2(conn, upload_id, staging_table="staging_catalog_v2"):
     return count
 
 
-def _sync_releases_v2(conn, upload_id, staging_table="staging_catalog_v2"):
+def _sync_releases_v2_old(conn, upload_id, staging_table="staging_catalog_v2"):
     """4. ЗАПОЛНЯЕМ RELEASE (релизы/альбомы)"""
     task_id = getattr(current_task.request, 'id', None)
     t0 = time.time()
@@ -953,6 +1054,75 @@ def _sync_releases_v2(conn, upload_id, staging_table="staging_catalog_v2"):
     return count
 
 
+
+
+def _sync_releases_v2(conn, upload_id, staging_table="staging_catalog_v2"):
+    """4. ЗАПОЛНЯЕМ RELEASE (релизы/альбомы)"""
+    t0 = time.time()
+    
+    result_releases = conn.execute(
+        text(f"""
+        WITH sc_base AS (
+            SELECT
+                sc.id,
+                NULLIF(sc.upc, '') AS upc,
+                COALESCE(NULLIF(sc.album_name, ''), 'Unknown Album') AS title,
+                CAST(NULLIF(sc.release_date, '') AS DATE) AS release_date,
+                l.id AS label_id
+            FROM {staging_table} sc
+            LEFT JOIN label l ON l.name = sc.label_name
+            WHERE NULLIF(sc.album_name, '') IS NOT NULL
+              AND sc.upload_id = :upload_id
+        ),
+        -- 1. Релизы С UPC (дедупликация внутри пачки по UPC)
+        with_upc AS (
+            SELECT DISTINCT ON (upc)
+                upc, title, release_date, label_id, 1 AS status
+            FROM sc_base
+            WHERE upc IS NOT NULL
+            ORDER BY upc,
+                     CASE WHEN label_id IS NOT NULL THEN 1 ELSE 2 END,
+                     CASE WHEN release_date IS NOT NULL THEN 1 ELSE 2 END,
+                     id
+        ),
+        -- 2. Релизы БЕЗ UPC (дедупликация внутри пачки по Title + Label + Release_Date)
+        without_upc AS (
+            SELECT DISTINCT ON (title, COALESCE(label_id, -1), COALESCE(release_date, '1900-01-01'::date))
+                NULL::text AS upc, title, release_date, label_id, 1 AS status
+            FROM sc_base
+            WHERE upc IS NULL
+            ORDER BY title, COALESCE(label_id, -1), COALESCE(release_date, '1900-01-01'::date), id
+        ),
+        all_candidates AS (
+            SELECT * FROM with_upc
+            UNION ALL
+            SELECT * FROM without_upc
+        )
+        INSERT INTO release (upc, title, release_date, label_id, status)
+        SELECT c.upc, c.title, c.release_date, c.label_id, c.status
+        FROM all_candidates c
+        WHERE NOT EXISTS (
+            -- Проверяем, нет ли уже такого релиза в таблице release
+            SELECT 1 FROM release r
+            WHERE (c.upc IS NOT NULL AND r.upc = c.upc)
+               OR (
+                   c.upc IS NULL 
+                   AND r.upc IS NULL 
+                   AND r.title = c.title 
+                   AND r.label_id IS NOT DISTINCT FROM c.label_id
+               )
+        )
+        ON CONFLICT (upc) DO NOTHING
+        RETURNING id;
+        """), {"upload_id": upload_id}
+    )
+    
+    count = len(result_releases.fetchall())
+    elapsed = time.time() - t0
+    print(f"✅ Releases вставлено: {count} ({elapsed:.1f} сек)")
+    TaskProgress.emit(upload_id, f"✅ Releases вставлено: {count} ({elapsed:.1f} сек)")
+    return count
+
 def _sync_tracks_v2_isrc(conn, upload_id, staging_table="staging_catalog_v2"):
     """5. ЗАПОЛНЯЕМ TRACK (треки)"""
     task_id = getattr(current_task.request, 'id', None)
@@ -984,10 +1154,11 @@ def _sync_tracks_v2_isrc(conn, upload_id, staging_table="staging_catalog_v2"):
                     'sales_start_date', NULLIF(sc.sales_start_date, '')
                 ) AS meta
             FROM {staging_table} sc
-            WHERE  sc.isrc IS NOT NULL  AND sc.upload_id = :upload_id 
+            WHERE  sc.isrc IS NOT NULL  and sc.right_id IS NOT NULL AND sc.upload_id = :upload_id 
                 AND NOT EXISTS (
                 SELECT 1 FROM track t2 
-                WHERE sc.isrc IS NOT NULL  AND t2.isrc = sc.isrc  AND t2.label_own_code = NULLIF(sc.right_id, '')
+                WHERE sc.isrc IS NOT NULL  AND t2.isrc = sc.isrc  AND    
+                t2.label_own_code IS NOT DISTINCT FROM sc.right_id
             )
             ORDER BY sc.id
         ),
@@ -1041,11 +1212,11 @@ def _sync_tracks_v2_label_code(conn, upload_id, staging_table="staging_catalog_v
                     'sales_start_date', NULLIF(sc.sales_start_date, '')
                 ) AS meta
             FROM {staging_table} sc
-            WHERE  sc.isrc IS NULL AND  sc.upload_id = :upload_id and NULLIF(sc.right_id, '') IS NOT NULL
+            WHERE  sc.isrc IS NULL AND  sc.upload_id = :upload_id and sc.right_id IS NOT NULL
                 AND NOT EXISTS (
                 SELECT 1 FROM track t2 
                 WHERE (sc.isrc IS NULL ) 
-                    AND t2.label_own_code = NULLIF(sc.right_id, '')
+                    AND t2.label_own_code IS NOT DISTINCT FROM sc.right_id
                     AND t2.title_norm_key = sc.track_name_norm_key
                 
             )
@@ -1125,10 +1296,20 @@ def _build_track_map_v2(conn, upload_id, staging_table="staging_catalog_v2"):
         SELECT 
             sc.id AS staging_id,
             t.id AS track_id,
-            r.id AS release_id
+            COALESCE(r_upc.id, r_title.id) AS release_id
         FROM {staging_table} sc
-        JOIN track t ON t.isrc = sc.isrc  AND t.label_own_code = NULLIF(sc.right_id, '')
-        LEFT JOIN release r ON r.upc = sc.upc
+        JOIN track t ON t.isrc = sc.isrc  AND t.label_own_code IS NOT DISTINCT FROM sc.right_id
+        LEFT JOIN label l ON l.name = sc.label_name
+        
+        LEFT JOIN release r_upc ON NULLIF(sc.upc, '') IS NOT NULL 
+                               AND r_upc.upc = NULLIF(sc.upc, '')
+        -- Вариант 2: Поиск релиза по Названию альбома и Лейблу (если UPC отсутствует)
+        LEFT JOIN release r_title ON NULLIF(sc.upc, '') IS NULL 
+                                 AND NULLIF(sc.album_name, '') IS NOT NULL 
+                                 AND r_title.title = sc.album_name 
+                                 AND r_title.label_id IS NOT DISTINCT FROM l.id
+
+
         WHERE sc.upload_id = :upload_id  AND sc.isrc IS NOT NULL and sc.status = 'inserted'
         
         UNION ALL
@@ -1136,11 +1317,19 @@ def _build_track_map_v2(conn, upload_id, staging_table="staging_catalog_v2"):
          SELECT 
             sc.id AS staging_id,
             t.id AS track_id,
-            r.id AS release_id
+            COALESCE(r_upc.id, r_title.id) AS release_id
         FROM {staging_table} sc
-        JOIN track t ON t.title_norm_key = sc.track_name_norm_key   AND t.label_own_code = NULLIF(sc.right_id, '')
-        LEFT JOIN release r ON r.upc = sc.upc
-        WHERE sc.upload_id = :upload_id   AND (sc.isrc IS NULL ) AND NULLIF(sc.right_id, '') IS NOT NULL and sc.status = 'inserted';
+        JOIN track t ON t.title_norm_key = sc.track_name_norm_key  AND t.label_own_code IS NOT DISTINCT FROM sc.right_id
+        LEFT JOIN label l ON l.name = sc.label_name
+        LEFT JOIN release r_upc ON NULLIF(sc.upc, '') IS NOT NULL 
+                               AND r_upc.upc = NULLIF(sc.upc, '')
+        -- Вариант 2: Поиск релиза по Названию альбома и Лейблу (если UPC отсутствует)
+        LEFT JOIN release r_title ON NULLIF(sc.upc, '') IS NULL 
+                                 AND NULLIF(sc.album_name, '') IS NOT NULL 
+                                 AND r_title.title = sc.album_name 
+                                 AND r_title.label_id IS NOT DISTINCT FROM l.id
+
+        WHERE sc.upload_id = :upload_id   AND (sc.isrc IS NULL ) AND sc.right_id IS NOT NULL and sc.status = 'inserted';
         
     
         CREATE INDEX idx_tmp_map_sid ON tmp_track_map(staging_id);
@@ -1359,6 +1548,42 @@ def _update_track_rights_from_staging(conn, upload_id, label_id):
     TaskProgress.emit(upload_id, f"🏁 ИТОГО вставлено в track_right: {track_rights_count} ({elapsed:.1f} сек)")
     return track_rights_count
 
+def _update_release_info_from_staging(conn, upload_id):
+    t0 = time.time()
+    TaskProgress.emit(upload_id, "🔄 Обновляем релизы (release) из staging...")
+    conn.execute(text("""
+        DELETE FROM track_release
+        WHERE track_id IN (
+            SELECT DISTINCT sc.track_id
+            FROM staging_catalog_v2 sc
+            JOIN staging_track_diff d ON d.track_id = sc.track_id
+            WHERE sc.upload_id = :upload_id
+              AND sc.track_id IS NOT NULL
+              AND d.field_name = 'release'
+        );
+    """), {"upload_id": upload_id})
+
+    result_link = conn.execute(text("""
+        INSERT INTO track_release (track_id, release_id)
+        SELECT DISTINCT ON (sc.track_id)
+            sc.track_id,
+            r.id
+        FROM staging_catalog_v2 sc
+        JOIN staging_track_diff d ON d.track_id = sc.track_id AND d.field_name = 'release'
+        JOIN release r ON r.upc = NULLIF(sc.upc, '')
+        WHERE sc.upload_id = :upload_id
+          AND sc.track_id IS NOT NULL
+          AND NULLIF(sc.upc, '') IS NOT NULL
+        ORDER BY sc.track_id, sc.id DESC
+        ON CONFLICT (track_id, release_id) DO NOTHING;
+    """), {"upload_id": upload_id})
+
+    count = result_link.rowcount
+    elapsed = time.time() - t0
+    msg = f"✅ track_release пересобрано: {count} ({elapsed:.1f} сек)"
+    print(msg)
+    TaskProgress.emit(upload_id, msg)
+    return count
 
 def _sync_track_labels_v2(conn, upload_id, staging_table="staging_catalog_v2"):
     """8. ЗАПОЛНЯЕМ TRACK_LABEL (связь трек - лейбл)"""
@@ -1486,11 +1711,7 @@ def _sync_track_rights_v1(conn, upload_id):
     return track_rights_count
 
 
-from sqlalchemy import text
-from sqlalchemy.engine import Connection
 
-from sqlalchemy import text
-from sqlalchemy.engine import Connection
 
 
 def _update_tracks_common_info_from_staging(conn: Connection, upload_id: str) -> None:
@@ -1530,14 +1751,31 @@ def _update_tracks_common_info_from_staging(conn: Connection, upload_id: str) ->
     conn.execute(query, {"upload_id": upload_id})
 
 
+
+def update_catalog_deleted_tracks(conn: Connection, label_id: int, upload_id: str) -> list:
+    query = text("""
+    UPDATE track t SET isDeleted = true, deleted_at = CURRENT_TIMESTAMP
+    FROM track_label tl
+    WHERE t.id = tl.track_id
+      AND tl.label_id = :label_id  
+      AND NOT EXISTS (
+        SELECT 1
+        FROM staging_catalog_v2 s
+        WHERE s.track_id = t.id AND s.upload_id = :upload_id
+      )
+    """)
+    
+   
+    result = conn.execute(
+        query,
+        {"label_id": label_id, "upload_id": upload_id}
+    )
+
+    return result.rowcount
+
 def get_catalog_deleted_tracks(conn: Connection, label_id: int, upload_id: str) -> list:
     query = text("""
-        SELECT 
-            t.id,
-            t.isrc,
-            t.title,
-            t.artist,
-            'DELETED' AS diff_type  -- Пометка типа изменения для сетки/стилей
+       select t.id, t.title, t.isrc, t.label_own_code
         FROM track t
         JOIN track_label tl ON tl.track_id = t.id
         WHERE tl.label_id = :label_id  
@@ -1548,7 +1786,7 @@ def get_catalog_deleted_tracks(conn: Connection, label_id: int, upload_id: str) 
           )
     """)
     
-    # .mappings().all() возвращает список словарей [{ 'id': 1, 'isrc': '...', ... }]
+   
     result = conn.execute(query, {"label_id": label_id, "upload_id": upload_id}).mappings().all()
     
     return [dict(row) for row in result]
@@ -1597,10 +1835,11 @@ def update_upload_status(conn: Connection, upload_id: str, status: str) -> None:
     """)
     conn.execute(query, {"upload_id": upload_id, "status": status})
 def refresh_track_materialized_views(conn: Connection) -> None:
-    TaskProgress.emit(upload_id, f"✅ Начинаем обновление представлений.") 
+
+    TaskProgress.emit(0, f"✅ Начинаем обновление представлений.") 
     conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_extended; "))
     conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights_prev; "))
     conn.execute(text("REFRESH MATERIALIZED VIEW  mv_track_rights; "))
        
     print(f"🏁 Представления обновлены.")
-    TaskProgress.emit(upload_id, f"✅ Загружка каталога завершена полностью.")  
+    TaskProgress.emit(0, f"✅ Загружка каталога завершена полностью.")  

@@ -21,7 +21,9 @@ class BaseExcelWriter:
         # constant_memory экономит ОЗУ на больших файлах
         self.workbook = xlsxwriter.Workbook(path, {'constant_memory': True})
         self.worksheet = self.workbook.add_worksheet("Каталог")
-        
+
+        self._format_cache = {}
+
         # Стиль для цветной шапки
         self.header_format = self.workbook.add_format({
             'bold': True, 'font_name': 'Calibri', 'font_size': 11,
@@ -34,6 +36,64 @@ class BaseExcelWriter:
         for col_idx, header in enumerate(headers):
             self.worksheet.write(0, col_idx, header, self.header_format)
         self.current_row = 1
+
+    def _get_format(self, **kwargs):
+        """Создает или возвращает уже имеющийся формат из кеша."""
+        key = tuple(sorted(kwargs.items()))
+        if key not in self._format_cache:
+            self._format_cache[key] = self.workbook.add_format(dict(kwargs))
+        return self._format_cache[key]
+    
+    def write_formatted_row(
+        self, 
+        row: list, 
+        row_bg_color: str = None, 
+        text_colors: dict = None, 
+        bold_cols: set = None
+    ):
+        self.worksheet.set_row(self.current_row, 20)
+        text_colors = text_colors or {}
+        bold_cols = bold_cols or set()
+
+        for col_idx, val in enumerate(row):
+            cell_val = "" if val is None else val
+
+            # Авто-конвертация строк в числа (чтобы "доли прав" выравнивались правильно)
+            if isinstance(cell_val, str):
+                # Игнорируем штрихкоды, начинающиеся с нуля (например, '01234')
+                if not (cell_val.startswith('0') and not cell_val.startswith('0.') and len(cell_val) > 1):
+                    try:
+                        if '.' in cell_val or ',' in cell_val:
+                            cell_val = float(cell_val.replace(',', '.'))
+                        else:
+                            cell_val = int(cell_val)
+                    except ValueError:
+                        pass
+
+            text_color = text_colors.get(col_idx)
+            is_bold = col_idx in bold_cols
+
+            fmt_kwargs = {
+                'font_name': 'Calibri',
+                'font_size': 11,
+                'valign': 'vcenter',
+                'border': 1,
+            }
+            if row_bg_color:
+                fmt_kwargs['bg_color'] = row_bg_color
+            if is_bold:
+                fmt_kwargs['bold'] = True
+            if text_color:
+                fmt_kwargs['font_color'] = text_color  # Задаем цвет текста вместо заливки
+
+            cell_fmt = self._get_format(**fmt_kwargs)
+            self.worksheet.write(self.current_row, col_idx, cell_val, cell_fmt)
+
+            val_str_len = len(str(cell_val))
+            if col_idx < len(self.max_lens) and val_str_len > self.max_lens[col_idx]:
+                self.max_lens[col_idx] = val_str_len
+
+        self.current_row += 1
 
     def write_rows(self, rows):
         for row in rows:

@@ -34,29 +34,27 @@ export function CatalogPage() {
     getUsers().then(setUsers).catch(() => setUsers([]));
   }, []);
 
-  // --- Обработчик загрузки ---
   const handleUpload = async (e) => {
     e.preventDefault();
     const file = fileInputRef.current?.files[0];
-    if (!file || !currentUserId) {
-      setMessage('Выберите файл и пользователя!');
+    if (!file || !labelId) {
+      setMessage('Выберите файл и лейбл!');
       return;
     }
 
     setUploading(true);
     setMessage('⏳ Запуск загрузки...');
-    setLogs([]);                  // очищаем старые логи
-    setActiveTaskId(null);        // сбрасываем старый taskId
+    setLogs([]);
+    setActiveTaskId(null);
 
     try {
-      const res = await uploadCatalogV2(file, currentUserId);
+      const res = await uploadCatalogV2(file, labelId);
       if (res.task_id) {
         setActiveTaskId(res.task_id);
         setMessage('⚙️ Файл загружается, обработка в фоне. Логи появятся ниже...');
       } else {
-        // Если бэкенд не вернул task_id, считаем операцию синхронной
         setMessage('✅ Файл успешно загружен и обработан');
-        fileInputRef.current.value = '';
+        if (fileInputRef.current) fileInputRef.current.value = '';
         const freshLabels = await getLabels();
         setLabels(freshLabels);
         setUploading(false);
@@ -65,7 +63,6 @@ export function CatalogPage() {
       setMessage('❌ Ошибка при загрузке: ' + (err.response?.data?.message || err.message));
       setUploading(false);
     }
-    // Не снимаем uploading, если есть task_id – снимем по завершении задачи (см. эффект ниже)
   };
 
   // --- Обработчик выгрузки (скачивания) ---
@@ -161,11 +158,17 @@ export function CatalogPage() {
           <input type="file" ref={fileInputRef} accept=".xlsx,.csv" disabled={uploading} className="form-control" />
         </div>
         <div className="form-group">
-          <label className="form-label">Пользователь:</label>
-          <select value={userId} onChange={e => setUserId(e.target.value)} className="form-control" disabled={uploading}>
-            <option value="">Выберите владельца данных</option>
-            {users.map(u => <option key={u.id} value={u.id}>{u.login}</option>)}
+          <label className="form-label">Лейбл:</label>
+          <select 
+            value={labelId} 
+            onChange={e => setLabelId(e.target.value)} 
+            className="form-control" 
+            disabled={uploading}
+          >
+            <option value="">Выберите лейбл</option>
+            {labels.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
           </select>
+          
           <button type="submit" disabled={uploading} className="btn btn-primary">
             {uploading ? 'Загрузка...' : 'Загрузить в базу'}
           </button>

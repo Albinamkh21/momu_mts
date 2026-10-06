@@ -6,8 +6,9 @@ import {
   updateCatalog,
   getCatalogDiff,
   deleteCatalogDiff,
-  downloadCatalogDiff,
   getCatalogDeleted,
+  exportCatalog, 
+  updateViews,
 } from './api/catalog.api';
 import { CatalogDiffGrid } from './components/CatalogDiffGrid';
 import { ConfirmModal } from '../../components/ConfirmModal';
@@ -31,6 +32,7 @@ export function CatalogDiffPage() {
   const [activeTaskId, setActiveTaskId] = useState(null);
   const fileInputRef = useRef();
   const pollRef = useRef(null);
+  const [isDeletedView, setIsDeletedView] = useState(false);
 
   const { logs, setLogs } = useTaskLogs(activeTaskId);
 
@@ -101,6 +103,9 @@ export function CatalogDiffPage() {
   };
 
   const startAction = (action) => {
+    if (action !== 'deleted') {
+      setIsDeletedView(false);
+    }
     clearInterval(pollRef.current);
     setActionLoading(action);
     setLogs([]);
@@ -183,25 +188,79 @@ export function CatalogDiffPage() {
     await dispatchTask(deleteCatalogDiff(labelId), '✅ Удалять было нечего.');
   };
 
-  const handleDownloadCatalogDiff = async () => {
+  // Запускает скачивание файла браузером из blob-ответа axios
+  const triggerFileDownload = (response, fallbackFilename) => {
+    const disposition = response.headers?.['content-disposition'] || '';
+    const match = disposition.match(/filename="?([^"]+)"?/);
+    const filename = match ? match[1] : fallbackFilename;
+
+    const url = window.URL.createObjectURL(new Blob([response.data]));
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', filename);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  };
+
+  // При responseType: 'blob' тело ошибки тоже приходит как Blob — распаковываем detail из него
+  const extractErrorMessage = async (err) => {
+    const data = err.response?.data;
+    if (data instanceof Blob) {
+      try {
+        const text = await data.text();
+        return JSON.parse(text).detail || text;
+      } catch {
+        return err.message;
+      }
+    }
+    return err.response?.data?.detail || err.message;
+  };
+
+  const handleExportCatalog = async (type, actionName, fallbackFilename, successMessage) => {
     if (!labelId) {
       setMessage('❌ Ошибка: не выбран лейбл');
       return;
     }
 
-    startAction('download');
-    setRows([]);
+    // Не трогаем rows/isDeletedView/polling — экспорт не связан с текущим отображением таблицы
+    setActionLoading(actionName);
     setMessage('⏳ Формирование файла...');
 
-    await dispatchTask(downloadCatalogDiff(labelId), '✅ Данных для сохранения в файл не найдено.');
+    try {
+      const response = await exportCatalog(labelId, type);
+      triggerFileDownload(response, fallbackFilename);
+      setMessage(successMessage);
+    } catch (err) {
+      setMessage('❌ Ошибка: ' + (await extractErrorMessage(err)));
+    } finally {
+      setActionLoading(null);
+    }
   };
 
+  const handleExportChanged = () =>
+    handleExportCatalog('changed', 'exportChanged', `catalog_changed_label_${labelId}.xlsx`, '✅ Файл с изменёнными треками сохранён');
+
+  const handleExportDeleted = () =>
+    handleExportCatalog('deleted', 'exportDeleted', `catalog_deleted_label_${labelId}.xlsx`, '✅ Файл с удалёнными треками сохранён');
+
+  const handleUpdateViews = async () => {
+    if (!labelId) {
+      setMessage('❌ Ошибка: не выбран лейбл');
+      return;
+    }
+    startAction('updateViews');
+    setMessage('⏳ Обновление представлений...');
+
+    await dispatchTask(updateViews(labelId), '✅ Представления обновлены.');
+  };
   const handleGetCatalogDeleted = async () => {
     if (!labelId) {
       setMessage('❌ Ошибка: не выбран лейбл');
       return;
     }
-
+    setIsDeletedView(true);
     startAction('deleted');
     setRows([]);
     setMessage('⏳ Получение удалённых треков...');
@@ -276,11 +335,17 @@ export function CatalogDiffPage() {
           </button>
         </div>
         <div className="catalog-diff-actions">
-          <button type="button" onClick={handleDownloadCatalogDiff} disabled={busy || !labelId} className="btn btn-primary">
-            {actionLoading === 'download' ? 'Формирование...' : 'Сохранить в файл'}
+          <button type="button" onClick={handleExportChanged} disabled={busy || !labelId} className="btn btn-primary">
+            {actionLoading === 'exportChanged' ? 'Формирование...' : 'Сохранить измененные в файл'}
+          </button>
+          <button type="button" onClick={handleExportDeleted} disabled={busy || !labelId} className="btn btn-primary">
+            {actionLoading === 'exportDeleted' ? 'Формирование...' : 'Сохранить удаленные'}
           </button>
           <button type="button" onClick={handleGetCatalogDeleted} disabled={busy || !labelId} className="btn btn-primary">
             {actionLoading === 'deleted' ? 'Получение...' : 'Показать удаленные треки'}
+          </button>
+          <button type="button" onClick={handleUpdateViews} disabled={busy || !labelId} className="btn btn-primary">
+            {actionLoading === 'updateViews' ? 'Обновление...' : 'Обновить представления'}
           </button>
         </div>
       </form>
@@ -294,7 +359,11 @@ export function CatalogDiffPage() {
       {rows.length > 0 && (
 
         <div className="catalog-diff-grid-wrap">
-          <CatalogDiffGrid rows={rows} searchTrigger={searchTrigger} />
+          <CatalogDiffGrid 
+          rows={rows} 
+          searchTrigger={searchTrigger}  
+          isDeleted={isDeletedView}
+          />
         </div>
       )}
 
