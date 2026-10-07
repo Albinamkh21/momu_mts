@@ -72,7 +72,7 @@ def upgrade() -> None:
         'track',
         ['isDeleted'],
         unique=False,
-        postgresql_where=sa.text('isDeleted = false')
+        postgresql_where=sa.text('"isDeleted" = false')
     )
 
     # 5. Создаем индексы
@@ -111,6 +111,6 @@ def downgrade() -> None:
     )
     common_status_enum.drop(op.get_bind(), checkfirst=True)
 
-    op.drop_index('idx_track_is_deleted', table_name='track', postgresql_where=sa.text('isDeleted = false'))
+    op.drop_index('idx_track_is_deleted', table_name='track', postgresql_where=sa.text('"isDeleted" = false'))
     op.drop_column('track', 'deleted_at')
     op.drop_column('track', 'isDeleted')
