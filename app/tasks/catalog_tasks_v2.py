@@ -83,7 +83,6 @@ def process_catalog_file_v2(self, file_path: str, upload_id: str, original_filen
         chunk_size = 50000
 
         db_columns = [
-            "track_id", "track_song_id",
             "upc", "isrc", "track_name", "genre_name", "album_name",
             "album_single", "track_number", "artist_name", "track_artist_name",
             "composer", "lyricist", "authors", "explicit", "duration",
@@ -454,9 +453,10 @@ def update_catalog_save_changes(self, prev_result, label_id):
             track_common_info_count = _update_tracks_common_info_from_staging(conn, upload_id)
             release_info_count = _update_release_info_from_staging(conn, upload_id)
 
-            deleted_tracks_count = update_catalog_deleted_tracks(conn, label_id, upload_id)
-            print(f"Deleted tracks count: {deleted_tracks_count}")
-            TaskProgress.emit(upload_id, f"Deleted tracks count: {deleted_tracks_count}")
+            #deleted_tracks_count = update_catalog_deleted_tracks(conn, label_id, upload_id)
+            #print(f"Deleted tracks count: {deleted_tracks_count}")
+            #TaskProgress.emit(upload_id, f"Deleted tracks count: {deleted_tracks_count}")
+
             update_upload_status(conn, upload_id, "COMPLETED")
             _cleanup_staging_v2(conn, upload_id, staging_table=staging_table)
             print(f"🧹 Staging очищен после синхронизации.")
@@ -470,8 +470,7 @@ def update_catalog_save_changes(self, prev_result, label_id):
         
                     "track_contributions": contributions_count,
                     "track_rights": track_rights_count,
-                    "track_common_info": track_common_info_count,
-                    "deleted_tracks": deleted_tracks_count
+                    "track_common_info": track_common_info_count
                 }
             }
             #refresh_track_materialized_views(conn)
