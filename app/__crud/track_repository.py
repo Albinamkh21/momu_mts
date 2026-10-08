@@ -206,17 +206,29 @@ class TrackRepository:
         return [r[0] for r in rows]
 
     def delete_track(self, track: Track) -> None:
-        # 1. Явно проверяем, есть ли записи в кэше отчетов для этого трека
+
+  
         has_reports = self.db.query(ReportTrackRightsCache).filter(
             ReportTrackRightsCache.track_id == track.id
         ).first() is not None
 
-        # 2. Если отчеты найдены — возбуждаем нашу ошибку и прекращаем работу
         if has_reports:
             raise TrackHasReportsError()
 
-        # 3. Если отчетов нет — удаляем трек.
-        # Благодаря passive_deletes=True в моделях, база сама каскадно удалит track_right и т.д.
+        # 2. Сначала удаляем дочерние записи
+        self.db.query(TrackRight).filter(
+            TrackRight.track_id == track.id
+        ).delete(synchronize_session=False)
+
+        self.db.query(TrackContribution).filter(
+            TrackContribution.track_id == track.id
+        ).delete(synchronize_session=False)
+
+        self.db.query(TrackLabel).filter(
+            TrackLabel.track_id == track.id
+        ).delete(synchronize_session=False)
+
+        # 3. Потом удаляем сам трек
         self.db.delete(track)
         self.db.flush()
 

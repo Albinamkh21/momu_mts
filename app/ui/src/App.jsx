@@ -58,7 +58,7 @@ function App() {
     }
   }, []);
 
-  const goToTrack = (id) => setPage({ type: 'track', id });
+  const goToTrack = (id) => setPage({ type: 'track', id, prev: page });
   const goToPerson = (id) => setPage({ type: 'person', id, prev: page });
   const goToCatalog = () => setPage({ type: 'catalog', prev: page });
   const goToCatalogDiff = () => setPage({ type: 'catalogDiff', prev: page });
@@ -95,10 +95,13 @@ function App() {
   };
 
   const goBack = () => {
+    // Запоминаем, уходим ли мы именно со страницы деталей трека, чтобы
+    // TracksPage знал, что нужно восстановить сохранённые фильтры.
+    const cameFromTrackDetail = page.type === 'track';
     if (page.prev) {
-      setPage(page.prev);
+      setPage({ ...page.prev, cameFromTrackDetail });
     } else {
-      setPage({ type: 'list' });
+      setPage({ type: 'list', cameFromTrackDetail });
     }
   };
 
@@ -190,7 +193,7 @@ function App() {
           )}
 
           {page.type === 'list' && (
-            <TracksPage onTrackClick={goToTrack} isComingFromDetail={page.prev?.type === 'track'} />
+            <TracksPage onTrackClick={goToTrack} isComingFromDetail={!!page.cameFromTrackDetail} />
           )}
         </MainLayout>
       )}

@@ -1,8 +1,9 @@
+from models import TrackRight, TrackContribution, TrackLabel, ReportTrackRightsCache, Track
 from fastapi import APIRouter, Depends, Query, Path, HTTPException, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from typing import Optional
+from typing import Optional,Literal
 from pydantic import BaseModel
 import logging
 
@@ -41,12 +42,16 @@ def get_tracks(
     query: Optional[str] = Query(None, description="Общий поиск"),
     artist_name: Optional[str] = Query(None, description="Поиск по исполнителю"),
     author_name: Optional[str] = Query(None, description="Поиск по авторам"),
+    
+    # Новые параметры для сортировки
+    sort_by: Optional[str] = Query("id", description="Колонка для сортировки (id, title, isrc, label_own_code)"),
+    sort_dir: Literal["asc", "desc"] = Query("asc", description="Направление (asc или desc)"),
+    
     limit: int = Query(100, le=500),
     offset: int = Query(0, ge=0, description="Сколько записей пропустить"),
     db: Session = Depends(get_db),
     response: Response = None,
 ):
-    # JOINs for person/label filters (replaces EXISTS — uses trigram + composite indexes)
     joins = []
     conditions = []
     params = {"lim": limit, "off": offset}
@@ -64,7 +69,6 @@ def get_tracks(
         conditions.append("t.label_own_code = :loc")
         params["loc"] = label_own_code
     if label_id:
-        # Simple semi-join via subquery; uses index on track_label(label_id)
         joins.append("""
             JOIN (
                 SELECT track_id FROM track_label WHERE label_id = :label_id
@@ -73,8 +77,6 @@ def get_tracks(
         params["label_id"] = label_id
 
     if artist_name:
-        # Start from person (trigram index on full_name), then look up
-        # track_contribution(person_id, role) — avoids full scan of track_contribution
         joins.append("""
             JOIN (
                 SELECT DISTINCT tc.track_id
@@ -88,7 +90,6 @@ def get_tracks(
         params["artist_name"] = f"%{artist_name}%"
 
     if author_name:
-        # Same pattern: trigram scan on person → composite index on track_contribution
         joins.append("""
             JOIN (
                 SELECT DISTINCT tc.track_id
@@ -103,6 +104,29 @@ def get_tracks(
 
     join_clause = "\n".join(joins)
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    # === ЛОГИКА СОРТИРОВКИ ===
+    
+    # 1. Белый список (allowlist) доступных полей, чтобы предотвратить SQL-инъекции
+    allowed_sort_columns = {
+        "id": "t.id",
+        "title": "t.title",
+        "isrc": "t.isrc",
+        "label_own_code": "t.label_own_code"
+    }
+
+    # 2. Получаем безопасное имя колонки из словаря. Если передали мусор — сортируем по id
+    order_col = allowed_sort_columns.get(sort_by.lower(), "t.id")
+    
+    # 3. Направление сортировки (гарантировано "asc" или "desc" благодаря типу Literal)
+    direction = sort_dir.upper()
+
+    # 4. Формируем секцию ORDER BY
+    # ВАЖНО: всегда добавляем t.id для стабильной пагинации!
+    if order_col != "t.id":
+        order_clause = f"ORDER BY {order_col} {direction}, t.id {direction}"
+    else:
+        order_clause = f"ORDER BY t.id {direction}"
 
     # Total count before pagination
     total_row = db.execute(
@@ -119,13 +143,14 @@ def get_tracks(
     if response is not None:
         response.headers["X-Total-Count"] = str(total)
 
+    # === ВСТАВЛЯЕМ СОРТИРОВКУ В ЗАПРОС ===
     tracks_rows = db.execute(
         text(f"""
             SELECT t.id, t.isrc, t.label_own_code, t.title
             FROM track t
             {join_clause}
             {where}
-            ORDER BY t.id
+            {order_clause}
             LIMIT :lim OFFSET :off
         """),
         params,
@@ -136,7 +161,7 @@ def get_tracks(
 
     track_ids = [r.id for r in tracks_rows]
 
-    # Участники (persons) через track_contribution + person
+    # Участники (persons)
     persons_rows = db.execute(
         text("""
             SELECT tc.track_id, p.id AS person_id, p.full_name, tc.role
@@ -147,7 +172,7 @@ def get_tracks(
         {"ids": track_ids},
     ).fetchall()
 
-    # Лейблы через track_label + label
+    # Лейблы 
     labels_rows = db.execute(
         text("""
             SELECT tl.track_id, l.name
@@ -180,7 +205,6 @@ def get_tracks(
         }
         for t in tracks_rows
     ]
-
 
 @router.get("/tracks/{track_id}")
 def get_track_detail(track_id: int = Path(...), db: Session = Depends(get_db)):
@@ -318,9 +342,14 @@ def get_track_detail(track_id: int = Path(...), db: Session = Depends(get_db)):
     }
 
 
+
 @router.delete("/tracks/{track_id}")
-def delete_track(track_id: int = Path(...), db: Session = Depends(get_db)):
+def delete_track(
+    track_id: int = Path(...),
+    db: Session = Depends(get_db)
+):
     repo = TrackRepository(db)
+
     track = repo.get_track(track_id)
     if track is None:
         raise HTTPException(status_code=404, detail="Track not found")
@@ -330,28 +359,30 @@ def delete_track(track_id: int = Path(...), db: Session = Depends(get_db)):
 
     try:
         repo.delete_track(track)
+
     except TrackHasReportsError:
         db.rollback()
-        # Это контролируемый нами случай: у старого трека есть отчеты
         raise HTTPException(
             status_code=409,
             detail="Невозможно удалить трек: на него есть ссылки в отчётах.",
         )
+
     except IntegrityError as e:
         db.rollback()
-        # Это непредвиденная ошибка БД (например, забыли какую-то связь каскадировать)
         raise HTTPException(
             status_code=500,
             detail=f"Системная ошибка при удалении трека: {str(e)}",
         )
 
     removed_persons = []
+
     for person_id in person_ids:
         if not repo.person_referenced_elsewhere(person_id):
             repo.delete_person(person_id)
             removed_persons.append(person_id)
 
     removed_right_holders = []
+
     for right_holder_id in right_holder_ids:
         if not repo.right_holder_referenced_elsewhere(right_holder_id):
             repo.delete_right_holder(right_holder_id)
@@ -365,32 +396,6 @@ def delete_track(track_id: int = Path(...), db: Session = Depends(get_db)):
         "removed_person_ids": removed_persons,
         "removed_right_holder_ids": removed_right_holders,
     }
-
-
-@router.post("/persons", status_code=201)
-def create_person(body: PersonUpdate, db: Session = Depends(get_db)):
-    name = body.full_name.strip()
-    if not name:
-        raise HTTPException(status_code=422, detail="full_name is required")
-
-    existing = db.execute(
-        text("SELECT id, full_name FROM person WHERE full_name = :name"),
-        {"name": name},
-    ).fetchone()
-    if existing:
-        return {"id": existing.id, "full_name": existing.full_name}
-
-    tokens, norm_key_full = _normalize_name(name)
-    result = db.execute(
-        text(
-            "INSERT INTO person (full_name, norm_key_full, tokens) "
-            "VALUES (:name, :norm, :tokens) RETURNING id, full_name"
-        ),
-        {"name": name, "norm": norm_key_full, "tokens": tokens},
-    ).fetchone()
-    db.commit()
-    return {"id": result.id, "full_name": result.full_name}
-
 
 @router.get("/persons/{person_id}")
 def get_person(person_id: int = Path(...), db: Session = Depends(get_db)):

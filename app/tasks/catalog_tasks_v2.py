@@ -198,13 +198,16 @@ def sync_catalog_dictionaries(self, prev_result, version="v2", upload_id: str = 
             print("📋 [v2] Нормализация staging_person...")
             TaskProgress.emit(upload_id, "📋 [v2] Нормализация staging_person...")
             normalize_person_data("staging_person", "full_name", "tokens", "full_name_norm_key", connection=conn)
+           
+           
             print("📋 [v2] Нормализация staging_catalog_v2.track_name...")
             TaskProgress.emit(upload_id, "📋 [v2] Нормализация staging_catalog_v2.track_name...")
-
-            if version == "v2":
-                normalize_data("staging_catalog_v2", "track_name", connection=conn)
-            else:
-                normalize_data("staging_catalog", "track_name", connection=conn)
+            normalize_data("staging_catalog_v2", "track_name", connection=conn)
+       
+            print("📋 [v2] Нормализация staging_catalog_v2.album_name...")
+            TaskProgress.emit(upload_id, "📋 [v2] Нормализация staging_catalog_v2.album_name...")
+            normalize_data("staging_catalog_v2", "album_name", connection=conn)
+                
 
 
             persons_count = _insert_unique_persons_v2(conn, upload_id)
@@ -231,13 +234,13 @@ def sync_catalog_dictionaries(self, prev_result, version="v2", upload_id: str = 
                 rights_count = _sync_right_holders_v1(conn, upload_id)
                 track_rights_count = _sync_track_rights_v1(conn, upload_id)
 
-            #_sync_track_labels_v2(conn, upload_id, staging_table=staging_table)
+            
 
           
             
 
-            #_cleanup_staging_v2(conn, upload_id, staging_table=staging_table)
-            #print(f"🧹 Staging очищен после синхронизации.")
+            _cleanup_staging_v2(conn, upload_id, staging_table=staging_table)
+            print(f"🧹 Staging очищен после синхронизации.")
        
             success = True
 
@@ -286,7 +289,7 @@ def find_catalog_diff_task(self,prev_result, label_id: int, upload_id: str = Non
         find_track_contribution_diff(conn, upload_id,  label_id=label_id, task_id=getattr(self.request, 'id', None))
         find_track_right_diff(conn, upload_id,  label_id=label_id, task_id=getattr(self.request, 'id', None))
         find_tracks_common_info_diff(conn, upload_id, label_id=label_id, task_id=getattr(self.request, 'id', None))
-        #find_release_diff(conn, upload_id, task_id=getattr(self.request, 'id', None))  
+        find_release_diff(conn, upload_id, task_id=getattr(self.request, 'id', None))  
 
         # 3. Собираем данные по изменившимся трекам (old/new) для проверки пользователем
         diff_rows = get_catalog_diff(conn, upload_id, label_id=label_id)
@@ -326,7 +329,14 @@ def update_catalog_step_1_prepare_data(self, prev_result, version="v2", upload_i
             print("📋 [v2] Нормализация staging_catalog_v2.track_name...")
             TaskProgress.emit(upload_id, "📋 [v2] Нормализация staging_catalog_v2.track_name...")
             normalize_data("staging_catalog_v2", "track_name", connection=conn)
-
+                 
+            print("📋 [v2] Нормализация staging_catalog_v2.album_name...")
+            TaskProgress.emit(upload_id, "📋 [v2] Нормализация staging_catalog_v2.album_name...")
+            normalize_data("staging_catalog_v2", "album_name", connection=conn)
+                
+            #print("📋 [v2] Нормализация release.title...")
+            #TaskProgress.emit(upload_id, "📋 [v2] Нормализация release.title...")
+            #normalize_data(table_name="release", column_name="title", connection=conn)
             
         
             update_staging_track_ids(conn, upload_id, task_id=getattr(self.request, 'id', None))

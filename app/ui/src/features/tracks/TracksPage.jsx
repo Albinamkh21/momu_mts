@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTracks } from './hooks/useTracks';
 import { TrackGrid } from './components/TrackGrid';
 import { CrudPageLayout } from '../../components/shared/CrudPageLayout';
@@ -21,29 +21,49 @@ const getInitialFilters = () => {
   return { title: '', isrc: '', label_own_code: '', label_id: '', artist_name: '', author_name: '' };
 };
 
+const hasActiveFilters = (filters) => {
+  return Object.values(filters).some(value => value !== '');
+};
+
 export const TracksPage = ({ onTrackClick, isComingFromDetail = false }) => {
   const { loading, labels, fetchTracksData } = useTracks();
   const [selectedPerson, setSelectedPerson] = useState(null);
-  // Se vindo do menu (isComingFromDetail=false), inicia com filtros vazios
-  // Se voltando de um detalhe (isComingFromDetail=true), carrega filtros salvos
   const [filters, setFilters] = useState(() => 
     isComingFromDetail ? getInitialFilters() : { title: '', isrc: '', label_own_code: '', label_id: '', artist_name: '', author_name: '' }
   );
+  // Состояние сортировки таблицы: [{ colId: 'title', sort: 'asc' }] или null (нет сортировки).
+  // Хранится здесь (а не только внутри DataGrid), чтобы запрос к API всегда уходил
+  // с актуальными sort_by/sort_dir, независимо от внутренней логики грида.
+  const [sortModel, setSortModel] = useState(null);
   const [searchTrigger, setSearchTrigger] = useState(0);
-  // null = closed, { trackId: null } = creating a new track, { trackId } = editing
   const [editorState, setEditorState] = useState(null);
   const [deleteError, setDeleteError] = useState('');
+
+  // Автоматически запустить поиск при возврате со страницы деталей, если есть сохраненные фильтры.
+  // Выполняется только один раз при монтировании компонента (TracksPage размонтируется
+  // при переходе на деталь трека и монтируется заново при возврате назад), поэтому
+  // не нужно подписываться на изменения filters — иначе поиск запускался бы на каждое
+  // изменение полей фильтра пользователем.
+  useEffect(() => {
+    if (isComingFromDetail && hasActiveFilters(filters)) {
+      setSearchTrigger(prev => prev + 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSearch = () => {
     if (!loading) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(filters));
-      // Просто увеличиваем счетчик, чтобы TrackGrid понял, что нужно обновить данные
       setSearchTrigger(prev => prev + 1);
     }
   };
 
   const handleFiltersChange = (newFilters) => {
     setFilters(newFilters);
+  };
+
+  const handleSortChange = (newSortModel) => {
+    setSortModel(newSortModel);
   };
 
   const openNewTrackEditor = () => setEditorState({ trackId: null });
@@ -98,6 +118,8 @@ export const TracksPage = ({ onTrackClick, isComingFromDetail = false }) => {
         fetchTracks={fetchTracksData}
         filters={filters}
         searchTrigger={searchTrigger}
+        sortModel={sortModel}
+        onSortChange={handleSortChange}
         onPersonClick={setSelectedPerson}
         onTrackClick={onTrackClick}
         onEditTrack={openEditTrackEditor}

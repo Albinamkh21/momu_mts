@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getTracks, getLabels } from '../api/tracks.api';
 
+const hasActiveFilters = (filters) => {
+  return Object.values(filters).some(value => value !== '');
+};
+
 export const useTracks = () => {
   const [loading, setLoading] = useState(false);
   const [labels, setLabels] = useState([]);
@@ -10,6 +14,11 @@ export const useTracks = () => {
   }, []);
 
   const fetchTracksData = useCallback(async (filters, limit, offset, sortModel) => {
+    // Если нет активных фильтров, не загружаем данные
+    if (!hasActiveFilters(filters)) {
+      return { items: [], total: 0 };
+    }
+
     setLoading(true);
     try {
       const params = { limit, offset };
@@ -21,15 +30,13 @@ export const useTracks = () => {
         params.sort_dir = sortModel[0].sort;
       }
 
-      // Теперь здесь полный объект ответа Axios
       const response = await getTracks(params); 
       
-      // Читаем заголовок (Axios приводит ключи к нижнему регистру автоматически)
       const totalHeader = response.headers['x-total-count'];
       const total = totalHeader ? parseInt(totalHeader, 10) : 0;
 
       return {
-        items: response.data, // Сами треки теперь лежат в .data
+        items: response.data,
         total: total
       };
     } catch (err) {
