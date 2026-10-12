@@ -12,12 +12,13 @@ from celery import chain
 from celery.result import AsyncResult
 from core.celery_app import celery_app
 from core.database import sync_engine
-from tasks.catalog_tasks_v2 import ( find_catalog_diff_task, get_catalog_deleted_task, get_catalog_diff_by_label_task, 
+from tasks.catalog_tasks_v2 import ( find_catalog_diff_task, get_catalog_deleted_task, get_catalog_diff_by_label_task, get_catalog_new_task,
                                     process_catalog_file_v2, sync_catalog_dictionaries, update_catalog_delete_changes,  update_catalog_save_changes,
                                       update_catalog_step_1_prepare_data, update_catalog_step_2_new_tracks,update_views_task )
 from services.catalog_diff_service import (
     get_catalog_diff as get_catalog_diff_rows,
     get_catalog_deleted_tracks,
+    get_catalog_new_tracks,
     get_processing_upload_id,
     
 )
@@ -91,7 +92,7 @@ async def recalculate_diff(file: UploadFile = File(...),
     workflow = chain(
         
         process_catalog_file_v2.s(file_path, upload_id=upload_id, original_filename=file.filename, label_id=label_id, user_id=current_user.id, is_additional_data=is_additional_data), 
-        update_catalog_step_1_prepare_data.s("v2", upload_id=upload_id),
+        update_catalog_step_1_prepare_data.s("v2", upload_id=upload_id, label_id=label_id),
         find_catalog_diff_task.s(label_id=label_id, upload_id=upload_id)
       
     )
@@ -125,7 +126,7 @@ async def save_catalog_diff(label_id: int = Form(...)):
 
    
     workflow = chain(
-        
+            
         update_catalog_step_2_new_tracks.s(label_id=label_id),
         update_catalog_save_changes.s(label_id=label_id)
     )
@@ -187,16 +188,37 @@ async def get_catalog_deleted(label_id: int):
         "filename": None
     }
 
+@router.get("/get_catalog_new/{label_id}")
+async def get_catalog_new(label_id: int):
+   
+    workflow = chain(
+        get_catalog_new_task.s(label_id)
+    )
+    task_result = workflow.apply_async()
+
+
+    return {
+        "message": "Запущена задача получения новых треков ",
+        "task_id": task_result.id,
+        "filename": None
+    }
+
 @router.get("/export_catalog/{label_id}")
-async def export_catalog(label_id: int, type: str = Query(..., pattern="^(changed|deleted)$")):
+async def export_catalog(label_id: int, type: str = Query(..., pattern="^(changed|deleted|new)$")):
     """Синхронная выгрузка в XLSX: type=changed — изменённые треки (diff, розовый/зелёный фон + красный
-    текст для изменённых полей), type=deleted — удалённые треки (розовый фон как в UI)."""
+    текст для изменённых полей), type=deleted — удалённые треки (розовый фон как в UI),
+    type=new — новые треки (зелёный фон как в UI)."""
     with sync_engine.begin() as conn:
         upload_id = get_processing_upload_id(conn, label_id)
 
         if type == "changed":
             rows = get_catalog_diff_rows(conn, upload_id, label_id=label_id)
             filename = f"catalog_changed_label_{label_id}.xlsx"
+        elif type == "new":
+            if not upload_id:
+                raise HTTPException(status_code=400, detail=f"Для лейбла (ID: {label_id}) нет активной загрузки")
+            rows = get_catalog_new_tracks(conn, label_id, upload_id=upload_id)
+            filename = f"catalog_new_label_{label_id}.xlsx"
         else:
             if not upload_id:
                 raise HTTPException(status_code=400, detail=f"Для лейбла (ID: {label_id}) нет активной загрузки")
@@ -249,6 +271,20 @@ async def export_catalog(label_id: int, type: str = Query(..., pattern="^(change
                 row_bg_color=row_bg_color,
                 text_colors=text_colors
             )
+    elif type == "new":
+        COLOR_NEW = '#F1FBF3'  # Зелёный (Новые)
+
+        for r in rows:
+            status_label = "Новый"
+            row_vals = [status_label]
+            for h in original_headers:
+                val = r.get(h)
+                if isinstance(val, (list, tuple, set)):
+                    row_vals.append("; ".join(str(v) for v in val))
+                else:
+                    row_vals.append("" if val is None else val)
+
+            excel_writer.write_formatted_row(row=row_vals, row_bg_color=COLOR_NEW)
     else:
         COLOR_DELETED = '#FFF2F2'  # Розовый (Удалённые)
 

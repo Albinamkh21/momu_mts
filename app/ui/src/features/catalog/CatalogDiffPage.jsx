@@ -7,6 +7,7 @@ import {
   getCatalogDiff,
   deleteCatalogDiff,
   getCatalogDeleted,
+  getCatalogNew,
   exportCatalog, 
   updateViews,
 } from './api/catalog.api';
@@ -33,6 +34,7 @@ export function CatalogDiffPage() {
   const fileInputRef = useRef();
   const pollRef = useRef(null);
   const [isDeletedView, setIsDeletedView] = useState(false);
+  const [isNewView, setIsNewView] = useState(false);
 
   const { logs, setLogs } = useTaskLogs(activeTaskId);
 
@@ -105,6 +107,9 @@ export function CatalogDiffPage() {
   const startAction = (action) => {
     if (action !== 'deleted') {
       setIsDeletedView(false);
+    }
+    if (action !== 'new') {
+      setIsNewView(false);
     }
     clearInterval(pollRef.current);
     setActionLoading(action);
@@ -245,6 +250,9 @@ export function CatalogDiffPage() {
   const handleExportDeleted = () =>
     handleExportCatalog('deleted', 'exportDeleted', `catalog_deleted_label_${labelId}.xlsx`, '✅ Файл с удалёнными треками сохранён');
 
+  const handleExportNew = () =>
+    handleExportCatalog('new', 'exportNew', `catalog_new_label_${labelId}.xlsx`, '✅ Файл с новыми треками сохранён');
+
   const handleUpdateViews = async () => {
     if (!labelId) {
       setMessage('❌ Ошибка: не выбран лейбл');
@@ -266,6 +274,19 @@ export function CatalogDiffPage() {
     setMessage('⏳ Получение удалённых треков...');
 
     await dispatchTask(getCatalogDeleted(labelId), '✅ Удалённых треков не найдено.');
+  };
+
+  const handleGetCatalogNew = async () => {
+    if (!labelId) {
+      setMessage('❌ Ошибка: не выбран лейбл');
+      return;
+    }
+    setIsNewView(true);
+    startAction('new');
+    setRows([]);
+    setMessage('⏳ Получение новых треков...');
+
+    await dispatchTask(getCatalogNew(labelId), '✅ Новых треков не найдено.');
   };
 
   const handleAdditionalDataToggle = (e) => {
@@ -344,6 +365,12 @@ export function CatalogDiffPage() {
           <button type="button" onClick={handleGetCatalogDeleted} disabled={busy || !labelId} className="btn btn-primary">
             {actionLoading === 'deleted' ? 'Получение...' : 'Показать удаленные треки'}
           </button>
+          <button type="button" onClick={handleGetCatalogNew} disabled={busy || !labelId} className="btn btn-primary">
+            {actionLoading === 'new' ? 'Получение...' : 'Показать новые треки'}
+          </button>
+          <button type="button" onClick={handleExportNew} disabled={busy || !labelId} className="btn btn-primary">
+            {actionLoading === 'exportNew' ? 'Формирование...' : 'Сохранить новые в файл'}
+          </button>
           <button type="button" onClick={handleUpdateViews} disabled={busy || !labelId} className="btn btn-primary">
             {actionLoading === 'updateViews' ? 'Обновление...' : 'Обновить представления'}
           </button>
@@ -363,6 +390,7 @@ export function CatalogDiffPage() {
           rows={rows} 
           searchTrigger={searchTrigger}  
           isDeleted={isDeletedView}
+          isNew={isNewView}
           />
         </div>
       )}

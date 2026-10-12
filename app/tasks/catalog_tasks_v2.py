@@ -7,7 +7,7 @@ from services.catalog_diff_service import (
     _sync_track_releases_v2, _sync_track_rights_v1, _sync_track_rights_v2, _sync_tracks_v2_isrc, _sync_tracks_v2_label_code, _update_release_info_from_staging,
     _update_track_contributions_from_staging, _update_track_rights_from_staging, _update_tracks_common_info_from_staging, create_catalog_upload, find_release_diff, find_track_contribution_diff,
     find_track_right_diff, find_tracks_common_info_diff, get_catalog_diff, get_processing_upload_id, refresh_track_materialized_views, update_catalog_deleted_tracks, update_staging_track_ids,
-      update_upload_status, update_catalog_statistics, get_catalog_deleted_tracks
+      update_upload_status, update_catalog_statistics, get_catalog_deleted_tracks, get_catalog_new_tracks
 )
 
 import polars as pl
@@ -306,7 +306,7 @@ def find_catalog_diff_task(self,prev_result, label_id: int, upload_id: str = Non
 
 
 @celery_app.task(name="update_catalog_step_1_prepare_data", bind=True)
-def update_catalog_step_1_prepare_data(self, prev_result, version="v2", upload_id=None):
+def update_catalog_step_1_prepare_data(self, prev_result, version="v2", upload_id=None, label_id=None):
     upload_id = upload_id or (prev_result.get("upload_id") if isinstance(prev_result, dict) else prev_result)
     print(f"2️⃣   Starting update_catalog_step_1_prepare_data for upload_id: {upload_id}")
     TaskProgress.emit(upload_id, f"Starting update_catalog_step_1_prepare_data for upload_id: {upload_id}")
@@ -334,12 +334,12 @@ def update_catalog_step_1_prepare_data(self, prev_result, version="v2", upload_i
             TaskProgress.emit(upload_id, "📋 [v2] Нормализация staging_catalog_v2.album_name...")
             normalize_data("staging_catalog_v2", "album_name", connection=conn)
                 
-            #print("📋 [v2] Нормализация release.title...")
-            #TaskProgress.emit(upload_id, "📋 [v2] Нормализация release.title...")
-            #normalize_data(table_name="release", column_name="title", connection=conn)
+            print("📋 [v2] Нормализация release.title...")
+            TaskProgress.emit(upload_id, "📋 [v2] Нормализация release.title...")
+            normalize_data(table_name="release", column_name="title", connection=conn)
             
         
-            update_staging_track_ids(conn, upload_id, task_id=getattr(self.request, 'id', None))
+            update_staging_track_ids(conn, upload_id, task_id=getattr(self.request, 'id', None), label_id=label_id)
 
 
 
@@ -459,7 +459,10 @@ def update_catalog_save_changes(self, prev_result, label_id):
                 if active_upload:
                     upload_id = active_upload
             contributions_count = _update_track_contributions_from_staging(conn, upload_id)
-            track_rights_count = _update_track_rights_from_staging(conn, upload_id, label_id)
+            
+            track_rights_author_count = _update_track_rights_from_staging(conn, upload_id, label_id, field_name='author_rights', cat_name='Author')
+            track_rights_related_count = _update_track_rights_from_staging(conn, upload_id, label_id, field_name='related_rights', cat_name='Related')
+            
             track_common_info_count = _update_tracks_common_info_from_staging(conn, upload_id)
             release_info_count = _update_release_info_from_staging(conn, upload_id)
 
@@ -479,7 +482,7 @@ def update_catalog_save_changes(self, prev_result, label_id):
                 "stats": {
         
                     "track_contributions": contributions_count,
-                    "track_rights": track_rights_count,
+                    "track_rights_author": track_rights_author_count,
                     "track_common_info": track_common_info_count
                 }
             }
@@ -587,6 +590,27 @@ def get_catalog_deleted_task(self, label_id):
     return {
             "diff": deleted_tracks,
             "total_diff_rows": len(deleted_tracks)
+        }
+
+@celery_app.task(name="get_catalog_new_task", bind=True)
+def get_catalog_new_task(self, label_id):
+    task_id = getattr(self.request, 'id', None)
+    with engine.begin() as conn:
+        upload_id = None
+        if label_id is not None:
+            active_upload = get_processing_upload_id(conn, label_id)
+            if active_upload:
+                upload_id = active_upload
+            else:
+                raise RuntimeError(
+                    f"Для лейбла (ID: {label_id}) нет активной загрузки "
+                   
+                )    
+
+        new_tracks = get_catalog_new_tracks(conn, label_id, upload_id=upload_id)
+    return {
+            "diff": new_tracks,
+            "total_diff_rows": len(new_tracks)
         }
 
 @celery_app.task(name="update_views_task", bind=True)

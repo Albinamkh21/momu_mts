@@ -1,13 +1,15 @@
 import React, { useCallback, useMemo } from 'react';
 import { DataGrid } from '../../../components/shared/DataGrid';
-import { getCatalogDiffColumns, getCatalogDeletedColumns } from './catalogDiffColumns';
+import { getCatalogDiffColumns, getCatalogDeletedColumns, getCatalogNewColumns } from './catalogDiffColumns';
 
-// Табличный вывод изменившихся/удаленных треков.
-export const CatalogDiffGrid = ({ rows, searchTrigger, isDeleted }) => {
+// Табличный вывод изменившихся/удаленных/новых треков.
+export const CatalogDiffGrid = ({ rows, searchTrigger, isDeleted, isNew }) => {
   
   const columnDefs = useMemo(() => {
-    return isDeleted ? getCatalogDeletedColumns() : getCatalogDiffColumns();
-  }, [isDeleted]);
+    if (isDeleted) return getCatalogDeletedColumns();
+    if (isNew) return getCatalogNewColumns();
+    return getCatalogDiffColumns();
+  }, [isDeleted, isNew]);
 
   const fetchRows = useCallback(
     async (_filters, limit, offset) => ({
@@ -19,6 +21,7 @@ export const CatalogDiffGrid = ({ rows, searchTrigger, isDeleted }) => {
 
   const getRowClass = (params) => {
     if (!params.data) return '';
+    if (isNew) return 'diff-row-new';
     // Для стандартных строк берем row_type ('old' / 'new'), для удаленных — подсвечиваем как 'old'
     const rowType = params.data.row_type || (params.data.diff_type === 'DELETED' ? 'old' : '');
     return rowType ? `diff-row-${rowType}` : '';

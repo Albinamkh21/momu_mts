@@ -102,6 +102,12 @@ export const getCatalogDeleted = async (labelId) => {
   return data;
 };
 
+// Получение новых треков по лейблу
+export const getCatalogNew = async (labelId) => {
+  const { data } = await httpClient.get(`/v1/catalog_v2/get_catalog_new/${labelId}`);
+  return data;
+};
+
 // Единая выгрузка каталога в файл (CSV): type = 'changed' | 'deleted'
 export const exportCatalog = async (labelId, type) => {
   return httpClient.get(`/v1/catalog_v2/export_catalog/${labelId}`, {
