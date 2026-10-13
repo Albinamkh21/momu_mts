@@ -126,7 +126,7 @@ async def save_catalog_diff(label_id: int = Form(...)):
 
    
     workflow = chain(
-            
+
         update_catalog_step_2_new_tracks.s(label_id=label_id),
         update_catalog_save_changes.s(label_id=label_id)
     )
@@ -142,7 +142,8 @@ async def save_catalog_diff(label_id: int = Form(...)):
 
 @router.post("/delete_catalog_diff")
 async def delete_catalog_diff(label_id: int = Form(...)):
-   
+
+    print(f"Starting delete catalog_upload+diff for label_id: {label_id}")
     workflow = chain(
         update_catalog_delete_changes.s(label_id=label_id)
     )

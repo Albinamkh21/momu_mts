@@ -119,7 +119,7 @@ def update_catalog_statistics(conn, upload_id: str, task_id: str) -> dict:
             COUNT(1) FILTER (WHERE sc.status = 'existing' AND mt.track_id IS NOT NULL) AS modified_count
         FROM staging_catalog_v2 sc
         LEFT JOIN modified_tracks mt ON mt.track_id = sc.track_id
-        WHERE sc.upload_id = :upload_id
+        WHERE sc.upload_id = :upload_id 
     """)
     
     row = conn.execute(query, {"upload_id": upload_id}).fetchone()
@@ -325,11 +325,6 @@ def find_track_right_diff_by_category(conn, upload_id: str,  label_id: int, task
     TaskProgress.emit(upload_id, f" Starting track right diff for upload_id: {upload_id} and field_name: {field_name}")
     print(f"  Starting track right diff for upload_id: {upload_id} and field_name: {field_name}")
     
-    # Очистка предыдущих расхождений по этому upload_id (опционально, для идемпотентности)
-    conn.execute(text("""
-        DELETE FROM staging_track_diff 
-        WHERE upload_id = :upload_id AND field_name = :field_name;
-    """), {"upload_id": upload_id, "field_name": field_name})
 
     # Определяем категорию и нужные колонки на основе field_name
     if "author" in field_name.lower():
@@ -344,6 +339,31 @@ def find_track_right_diff_by_category(conn, upload_id: str,  label_id: int, task
         int_col = "related_right_id_int"
         mob_col = "related_right_id_mob"
         pub_col = "related_right_id_pub"
+
+
+    check_sql = text(f"""
+            SELECT COUNT(*) FROM staging_catalog_v2 
+            WHERE upload_id = :upload_id 
+              AND ({treaty_col} IS NOT NULL AND {treaty_col} != '')
+              AND (
+                  COALESCE(NULLIF(REPLACE(CAST({int_col} AS TEXT), ',', '.'), '')::numeric(5,2), 0) > 0
+                  OR COALESCE(NULLIF(REPLACE(CAST({mob_col} AS TEXT), ',', '.'), '')::numeric(5,2), 0) > 0
+                  OR COALESCE(NULLIF(REPLACE(CAST({pub_col} AS TEXT), ',', '.'), '')::numeric(5,2), 0) > 0
+              )
+        """)
+    has_data = conn.execute(check_sql, {"upload_id": upload_id}).scalar()
+        
+    if not has_data:
+        msg = f"ℹ️ В текущем файле отсутствуют актуальные данные для категории {cat_name} (все доли равны 0 или колонки пусты). Дифф и обновление для нее пропущены."
+        print(msg)
+        TaskProgress.emit(upload_id, msg)
+        return 0    
+
+     # Очистка предыдущих расхождений по этому upload_id (опционально, для идемпотентности)
+    conn.execute(text("""
+        DELETE FROM staging_track_diff 
+        WHERE upload_id = :upload_id AND field_name = :field_name;
+    """), {"upload_id": upload_id, "field_name": field_name})
 
     sql = f"""
         WITH target_track AS (
