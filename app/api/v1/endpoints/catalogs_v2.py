@@ -1,3 +1,5 @@
+import sys
+
 from services.csv_writer import BaseExcelWriter
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Query
 from fastapi.responses import StreamingResponse
@@ -11,7 +13,7 @@ from openpyxl.styles import Font, PatternFill
 from celery import chain
 from celery.result import AsyncResult
 from core.celery_app import celery_app
-from core.database import sync_engine
+from core.database import sync_engine, create_engine
 from tasks.catalog_tasks_v2 import ( find_catalog_diff_task, get_catalog_deleted_task, get_catalog_diff_by_label_task, get_catalog_new_task,
                                     process_catalog_file_v2, sync_catalog_dictionaries, update_catalog_delete_changes,  update_catalog_save_changes,
                                       update_catalog_step_1_prepare_data, update_catalog_step_2_new_tracks,update_views_task )
@@ -23,13 +25,30 @@ from services.catalog_diff_service import (
     
 )
 from api.deps import get_current_user, User, Depends
+from core.database import get_conn
+
+def get_database_url():
+    # Проверяем не только env-переменные, но и запущен ли сейчас pytest в принципе.
+    # Если запущен pytest, но DATABASE_URL_TEST почему-то пустой, 
+    # мы можем программно подставить тестовую базу или принудительно ругаться.
+    is_testing = "pytest" in sys.modules or os.getenv("TESTING") == "true"
+    
+    if is_testing:
+        test_url = os.getenv("DATABASE_URL_TEST")
+        if test_url:
+            return test_url
+        # Если тест идет, а тестовой переменной нет — подставляем тестовую базу явно по шаблону
+        return os.getenv("DATABASE_URL", "").replace("/momu", "/momu_test")
+        
+    return os.getenv("DATABASE_URL")
+
+DATABASE_URL = get_database_url()
+engine = create_engine(DATABASE_URL)
 
 router = APIRouter()
 
 STORAGE_DIR = "/app/storage"
 
-# Те же цвета, что и в таблице на фронте (catalogDiff.css): розовый — текущие (сохранённые)
-# данные, зелёный — новые (пришедшие в файле), красный — изменённые значения.
 DIFF_ROW_TYPE_LABELS = {"old": "Сохранено", "new": "Пришло"}
 DIFF_ROW_FILL = {
     "old": PatternFill(start_color="FFF2F2", end_color="FFF2F2", fill_type="solid"),
@@ -123,22 +142,32 @@ async def get_diff_result(task_id: str):
 
 @router.post("/save_catalog_diff")
 async def save_catalog_diff(label_id: int = Form(...)):
+    try:
+        upload_id = None
+        with engine.begin() as conn:
+            if label_id is not None:
+                active_upload = get_processing_upload_id(conn, label_id)
+                if active_upload:
+                    upload_id = active_upload
 
-   
-    workflow = chain(
+        if not upload_id:
+            raise HTTPException(status_code=400, detail="Нет активной загрузки для этого лейбла")
+        workflow = chain(
 
-        update_catalog_step_2_new_tracks.s(label_id=label_id),
-        update_catalog_save_changes.s(label_id=label_id)
-    )
+            update_catalog_step_2_new_tracks.s(label_id=label_id, upload_id=upload_id),
+            update_catalog_save_changes.s(label_id=label_id, upload_id=upload_id)
+        )
 
-    task_result = workflow.apply_async()
+        task_result = workflow.apply_async(task_id=upload_id)
 
 
-    return {
-        "message": "Запущена задача изменения каталога",
-        "task_id": task_result.id,
-        "filename": None
-    }
+        return {
+            "message": "Запущена задача изменения каталога",
+            "task_id": task_result.id,
+            "filename": None
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/delete_catalog_diff")
 async def delete_catalog_diff(label_id: int = Form(...)):

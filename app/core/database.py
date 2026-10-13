@@ -7,6 +7,9 @@ import os
 class Base(DeclarativeBase):
     pass
 
+def get_conn():
+    with sync_engine.begin() as conn:
+        yield conn
 
 def get_database_url() -> str:
     db_url = os.getenv("DATABASE_URL")

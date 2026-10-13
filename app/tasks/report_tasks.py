@@ -3,7 +3,7 @@ import polars as pl
 from sqlalchemy import create_engine, text
 from core.celery_app import celery_app
 from celery import current_task
-from core.constants import RightCategory, FindingSource, RightUsageType, NUMBERS
+from core.constants import RightCategory, FindingSource, RightUsageType, NUMBERS, MONTHS_RU
 from .utils import clean_null_bytes
 from services.broadcaster import TaskProgress
 import uuid
@@ -2176,6 +2176,12 @@ def _write_momu_summary_sheet(wb, df_service, df_track, label_name, licensor_nam
     ws.merge_range(1, 0, 1, 3, "к Лицензионному Договору", subtitle_fmt)
     ws.merge_range(2, 0, 2, 3, licensor_name, subtitle_fmt)
     ws.merge_range(3, 0, 3, 3, f"за период  {period_str}", subtitle_fmt)
+
+    now = datetime.now()
+    date_str = f"{now.day} {MONTHS_RU[now.month]} {now.year}"
+    ws.write(4, 0, "Алматы", subtitle_fmt) 
+    ws.write(4, 3, date_str, subtitle_fmt)
+
 
     # Таблица ведомости
     headers = ["№ договора", "Доход, KZT", "Роялти Лицензиара, %", "К выплате Лицензиару, KZT"]

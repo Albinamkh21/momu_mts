@@ -33,6 +33,7 @@ export function CatalogDiffPage() {
   const [activeTaskId, setActiveTaskId] = useState(null);
   const fileInputRef = useRef();
   const pollRef = useRef(null);
+  const actionRef = useRef(null)
   const [isDeletedView, setIsDeletedView] = useState(false);
   const [isNewView, setIsNewView] = useState(false);
 
@@ -45,23 +46,33 @@ export function CatalogDiffPage() {
     return () => clearInterval(pollRef.current);
   }, []);
 
-  // Единая точка обработки результата задачи: diff-задачи возвращают result.diff,
-  // save/delete — только статистику, поэтому таблица очищается как устаревшая (п.6).
-  const applyTaskResult = (res, emptyMessage) => {
+  
+  const applyTaskResult = (res, emptyMessage, actionType) => { // 👈 Принимаем actionType аргументом
     const diffRows = res.result?.diff;
     const stats = res.result?.stats;
-    
+
+    // 🛑 Если это сохранение или удаление — принудительно очищаем rows, чтобы таблица не открывалась
+    if (actionType === 'save' || actionType === 'delete') {
+      setRows([]);
+      setSearchTrigger((prev) => prev + 1);
+      
+      if (stats && (stats.new_tracks > 0 || stats.existing_tracks > 0 || stats.modified_tracks > 0)) {
+        setMessage(`✅ Операция выполнена успешно | 📊 Статистика: новых треков: ${stats.new_tracks}, существующих: ${stats.existing_tracks}, изменённых: ${stats.modified_tracks}`);
+      } else {
+        setMessage('✅ Операция выполнена успешно');
+      }
+      return;
+    }
+
     if (Array.isArray(diffRows)) {
       setRows(diffRows);
       setSearchTrigger((prev) => prev + 1);
       const totalTracks = res.result?.total_diff_rows ?? diffRows.length / 2;
       
-      // Формируем сообщение со статистикой
       let message = totalTracks > 0
         ? `✅ Найдено изменённых треков: ${totalTracks}`
         : emptyMessage;
       
-      // Добавляем детальную статистику если она есть
       if (stats && (stats.new_tracks > 0 || stats.existing_tracks > 0 || stats.modified_tracks > 0)) {
         message += ` | 📊 Статистика: новых треков: ${stats.new_tracks}, существующих: ${stats.existing_tracks}, изменённых: ${stats.modified_tracks}`;
       }
@@ -71,7 +82,6 @@ export function CatalogDiffPage() {
       setRows([]);
       setSearchTrigger((prev) => prev + 1);
       
-      // Отображаем статистику даже если нет diff (например, при save/delete)
       if (stats && (stats.new_tracks > 0 || stats.existing_tracks > 0 || stats.modified_tracks > 0)) {
         setMessage(`✅ Операция выполнена успешно | 📊 Статистика: новых треков: ${stats.new_tracks}, существующих: ${stats.existing_tracks}, изменённых: ${stats.modified_tracks}`);
       } else {
@@ -82,6 +92,8 @@ export function CatalogDiffPage() {
 
   const runPolling = (taskId, emptyMessage) => {
     clearInterval(pollRef.current);
+    const currentAction = actionRef.current; // 👈 Фиксируем действие в локальной переменной
+
     pollRef.current = setInterval(async () => {
       try {
         const res = await getDiffResult(taskId);
@@ -91,14 +103,19 @@ export function CatalogDiffPage() {
         setActionLoading(null);
 
         if (res.status === 'FAILURE') {
+          actionRef.current = null; // Сбрасываем при ошибке
           setMessage('❌ Ошибка: ' + (res.error || 'неизвестная ошибка'));
           return;
         }
 
-        applyTaskResult(res, emptyMessage);
+        // 👈 Передаем currentAction внутрь обработчика результата
+        applyTaskResult(res, emptyMessage, currentAction);
+        
+        actionRef.current = null; // 👈 Сбрасываем реф ТОЛЬКО ПОСЛЕ обработки результата
       } catch (err) {
         clearInterval(pollRef.current);
         setActionLoading(null);
+        actionRef.current = null;
         setMessage('❌ Ошибка при получении результата: ' + err.message);
       }
     }, POLL_INTERVAL_MS);
@@ -113,6 +130,7 @@ export function CatalogDiffPage() {
     }
     clearInterval(pollRef.current);
     setActionLoading(action);
+    actionRef.current = action;
     setLogs([]);
     setActiveTaskId(null);
   };
@@ -125,6 +143,7 @@ export function CatalogDiffPage() {
         runPolling(res.task_id, emptyMessage);
       } else {
         setActionLoading(null);
+        actionRef.current = null;
         setMessage('❌ Не удалось получить task_id');
       }
     } catch (err) {
@@ -147,7 +166,7 @@ export function CatalogDiffPage() {
 
     await dispatchTask(
       recalculateDiff(file, labelId, isAdditionalData),
-      '✅ Изменений не найдено — каталог уже соответствует файлу'
+      '✅ Изменений не найдено.'
     );
   };
 
@@ -163,7 +182,7 @@ export function CatalogDiffPage() {
 
     await dispatchTask(
       getCatalogDiff(labelId),
-      '✅ Активных изменений (в статусе PROCESSING) для данного лейбла не найдено.'
+      '✅ Активных загрузок для данного лейбла не найдено.'
     );
   };
 

@@ -372,26 +372,19 @@ def update_catalog_step_1_prepare_data(self, prev_result, version="v2", upload_i
 
 
 @celery_app.task(name="update_catalog_step_2_new_tracks", bind=True)
-def update_catalog_step_2_new_tracks(self, label_id=None):
-    upload_id = None
+def update_catalog_step_2_new_tracks(self, label_id=None, upload_id=None):
     task_id = getattr(self.request, 'id', None)
     success = False
     staging_table = "staging_catalog_v2"
     try:
      
         with engine.begin() as conn:
-            if label_id is not None:
-                active_upload = get_processing_upload_id(conn, label_id)
-                if active_upload:
-                    upload_id = active_upload
             print("📋 Начинаем загрузку новых треков в справочники.." , upload_id)
             TaskProgress.emit(upload_id, f"🚀 Начинаем загрузку новых треков в справочники...")
                        
             persons_count = _insert_unique_persons_v2(conn, upload_id)
             releases_count = _sync_releases_v2(conn, upload_id, staging_table=staging_table)
-
-            
-            #new tracks
+        
             tracks_count_isrc = _sync_tracks_v2_isrc(conn, upload_id, staging_table=staging_table)   
             tracks_count_code = _sync_tracks_v2_label_code(conn, upload_id, staging_table=staging_table)
            
@@ -401,7 +394,6 @@ def update_catalog_step_2_new_tracks(self, label_id=None):
             track_release_count = _sync_track_releases_v2(conn, upload_id, staging_table=staging_table)
             contributions_count = _sync_track_contributions_v2(conn, upload_id)
 
-    
             _sync_track_labels_v2(conn, upload_id, staging_table=staging_table)
 
           
@@ -415,7 +407,7 @@ def update_catalog_step_2_new_tracks(self, label_id=None):
             
 
             #_cleanup_staging_v2(conn, upload_id, staging_table=staging_table)
-            print(f"🧹 Staging очищен после синхронизации.")
+            #print(f"🧹 Staging очищен после синхронизации.")
        
             success = True
 
@@ -445,19 +437,15 @@ def update_catalog_step_2_new_tracks(self, label_id=None):
             TaskProgress.emit(upload_id, "🧹 Staging очищен после ошибки")
 
 @celery_app.task(name="update_catalog_save_changes", bind=True)
-def update_catalog_save_changes(self, prev_result, label_id):
-    upload_id = prev_result.get("upload_id") if isinstance(prev_result, dict) else prev_result
-    #upload_id = None
+def update_catalog_save_changes(self, prev_result, label_id, upload_id=None):
+   
     task_id = getattr(self.request, 'id', None)
     success = False
     staging_table = "staging_catalog_v2"
     try:
 
         with engine.begin() as conn:
-            if label_id is not None and upload_id is None:
-                active_upload = get_processing_upload_id(conn, label_id)
-                if active_upload:
-                    upload_id = active_upload
+            
             contributions_count = _update_track_contributions_from_staging(conn, upload_id)
             
             track_rights_author_count = _update_track_rights_from_staging(conn, upload_id, label_id, field_name='author_rights', cat_name='Author')
