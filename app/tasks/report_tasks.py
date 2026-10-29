@@ -2144,6 +2144,7 @@ from pathlib import Path
 def _write_momu_summary_sheet(wb, df_service, df_track, label_name, licensor_name, period_str, total_income):
     ws = wb.add_worksheet("Сводный отчет")
 
+    ws.hide_gridlines(2)
   
     title_fmt    = wb.add_format({'bold': True, 'font_size': 14, 'align': 'center', 'valign': 'vcenter'})
     subtitle_fmt = wb.add_format({'bold': True, 'font_size': 11, 'align': 'center', 'valign': 'vcenter'})
@@ -2437,6 +2438,7 @@ def export_report_distribution_to_excel_momu(
             unique_ids = df_rights[group_col].unique().to_list()
             all_summaries = []
             output_files = []
+            all_summaries_momu = []
 
             # Если режим стандартный — открываем один общий Workbook
             std_wb = None
@@ -2556,6 +2558,16 @@ def export_report_distribution_to_excel_momu(
                 
                 df_sheet = df_sheet.select(FINAL_COLUMNS)
 
+        
+                # Сбор данных для единого итогового отчета по всем ПО
+                momu_summary_row = df_sheet.select([
+                    pl.lit(str(group_name)).alias("Правообладатель"),
+                    pl.col("Сумма Лицензиара за авторские права, тенге").sum().alias("Сумма Лицензиара за авторские права, тенге"),
+                    pl.col("Сумма Лицензиара за смежные права, тенге").sum().alias("Сумма Лицензиара за смежные права, тенге")
+                ])
+                all_summaries_momu.append(momu_summary_row)
+                # ----------------------------------------
+
                 # 7. Добавление строки ИТОГО
                 df_sheet = df_sheet.with_columns(pl.col("Код лейбла").cast(pl.Utf8))
                 total_row_dict = {col: None for col in FINAL_COLUMNS}
@@ -2618,10 +2630,40 @@ def export_report_distribution_to_excel_momu(
                 apply_final_formats(rh_wb)
                 rh_wb.close()
                 output_files.append(rh_filepath)
-               
-
-            
                 
+
+          
+
+            # ---------- ГЕНЕРАЦИЯ ЕДИНОГО ИТОГОВОГО ОТЧЕТА ПО ВСЕМ ПО ----------
+            if all_summaries_momu:
+                df_momu_total = pl.concat(all_summaries_momu)
+
+                # Строка ИТОГО по всем ПО
+                total_row_dict = {
+                    "Правообладатель": "ИТОГО",
+                    "Сумма Лицензиара за авторские права, тенге": df_momu_total["Сумма Лицензиара за авторские права, тенге"].sum(),
+                    "Сумма Лицензиара за смежные права, тенге": df_momu_total["Сумма Лицензиара за смежные права, тенге"].sum()
+                }
+                df_momu_total_row = pl.DataFrame([total_row_dict], schema=df_momu_total.schema)
+                df_momu_final = pl.concat([df_momu_total, df_momu_total_row])
+
+                # Путь и запись нового итогового файла
+                momu_summary_filepath = os.path.join(storage_dir, f"report_total_right_holders_{year}_{month_from}_{month_to}_{timestamp}.xlsx")
+                momu_summary_wb = xlsxwriter.Workbook(momu_summary_filepath)
+                
+                df_momu_final.write_excel(
+                    momu_summary_wb, 
+                    worksheet="Итого по ПО", 
+                    autofit=True, 
+                    column_formats={
+                        "Сумма Лицензиара за авторские права, тенге": "#,##0.00",
+                        "Сумма Лицензиара за смежные права, тенге": "#,##0.00"
+                    }
+                )
+                apply_final_formats(momu_summary_wb)
+                momu_summary_wb.close()
+                output_files.append(momu_summary_filepath)
+            # -------------------------------------------------------------------
 
             return {"status": "success", "rows_exported": len(df_base), "output_files": output_files}
 
@@ -2685,6 +2727,7 @@ def export_report_distribution_to_excel(
             query_params.update(labels_params)
 
         # ---------- 2. Запрос базовых данных ----------
+        #JOIN track_label tl on tl.track_id = t.track_id
         base_query = text(f"""
             SELECT DISTINCT
                 ra.id AS staging_id, 
@@ -2709,7 +2752,10 @@ def export_report_distribution_to_excel(
             JOIN report r ON r.upload_id = ra.upload_id
             JOIN report_track_rights_cache rtc ON rtc.staging_id = ra.id
             JOIN mv_track_extended t ON t.track_id = rtc.track_id
-            JOIN track_label tl on tl.track_id = t.track_id
+            
+            JOIN right_holder rh ON rh.id = rtc.right_holder_id  
+            JOIN label l ON l.id = rh.label_id
+            
             WHERE r.report_year = :year
             AND r.report_month BETWEEN :month_from AND :month_to
             AND r.right_category_id {category_filter}
@@ -2810,7 +2856,51 @@ def export_report_distribution_to_excel(
                         "Период": pl.String        
                     })
             print("Собрали нераспределенные треки...")
-            TaskProgress.emit(getattr(current_task.request, 'id', None), "Собрали нераспределенные треки...Начинаем подготовку к экспорту...")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), "Собрали нераспределенные треки...Начинаем подготовку сбор нераспределенных треков без прав...")
+
+
+            # Запрос нераспределенных треков
+            unclaimed_query_esists_no_rights = text(f"""
+                SELECT 
+                    ra.id AS staging_id,
+                    ra.label_own_code::VARCHAR AS "Отчет код лейбла",
+                    ra.isrc::VARCHAR AS "Отчет ISRC",
+                    ra.track_name AS "Отчет название трека",
+                    ra.artist_name AS "Отчет исполнитель",
+                    ra.authors AS "Отчет авторы",
+                    ra.play_count AS "Кол-во прослушиваний",
+                    ra.payout_amount AS "Сумма выплат",
+                    ra.payout_amount_author AS "Сумма выплат автор",
+                    ra.payout_amount_related AS "Сумма выплат смежка",
+                    ra.service_name AS "Сервис",
+                    ra.period AS "Период"
+                FROM staging_report_agg ra
+                JOIN report r ON r.upload_id = ra.upload_id
+                join report_track_rights_distribution rtrd ON rtrd.staging_id = ra.id AND rtrd.report_id = r.id
+                WHERE r.report_year = :year
+                AND r.report_month BETWEEN :month_from AND :month_to
+                AND r.right_category_id {category_filter}
+                AND r.right_usage_type_id {usage_filter}
+                {partner_condition}
+                AND rtrd.original_share_percentage = 0 and rtrd.calculated_share_percentage = 0 and rtrd.final_payout_amount = 0
+            """)
+            df_esists_no_rights = pl.read_database(unclaimed_query_esists_no_rights, conn, execute_options={"parameters": query_params},
+                schema_overrides={
+                        "staging_id": pl.Int64,
+                        "Отчет код лейбла": pl.String,    
+                        "Отчет ISRC": pl.String,
+                        "Отчет название трека": pl.String,
+                        "Отчет исполнитель": pl.String,
+                        "Отчет авторы": pl.String,
+                        "Кол-во прослушиваний": pl.Int64,   
+                        "Сумма выплат": pl.Float64 , 
+                        "Сумма выплат автор": pl.Float64,
+                        "Сумма выплат смежка": pl.Float64,
+                        "Сервис": pl.String,  
+                        "Период": pl.String        
+                    })
+            print("Собрали нераспределенные треки...")
+            TaskProgress.emit(getattr(current_task.request, 'id', None), "Собрали нераспределенные треки(нет прав)...Начинаем подготовку к экспорту...")
 
 
             # ---------- Формирование чистых названий для файла ----------
@@ -2971,6 +3061,23 @@ def export_report_distribution_to_excel(
                     df_unclaimed = pl.concat([df_unclaimed, df_uncl_total])
 
                     df_unclaimed.write_excel(sys_wb, worksheet="Нераспределенное", autofit=True, column_formats=get_column_formats(df_unclaimed.columns))
+                # Запись нераспределенного
+                if df_esists_no_rights.height > 0:
+                    df_esists_no_rights = df_esists_no_rights.with_columns(pl.col("Отчет код лейбла").cast(pl.Utf8))
+                    esists_no_rights_total = {col: None for col in df_esists_no_rights.columns}
+                    esists_no_rights_total["Отчет код лейбла"] = "ИТОГО"
+                    
+                    if "Сумма выплат" in df_esists_no_rights.columns:
+                        esists_no_rights_total["Сумма выплат"] = df_esists_no_rights["Сумма выплат"].sum()
+
+                    for col in ["Сумма выплат автор", "Сумма выплат смежка"]:
+                        if col in df_esists_no_rights.columns:
+                            esists_no_rights_total[col] = df_esists_no_rights[col].sum()    
+                        
+                    df_esists_no_rights_total = pl.DataFrame([esists_no_rights_total], schema=df_esists_no_rights.schema)
+                    df_esists_no_rights = pl.concat([df_esists_no_rights, df_esists_no_rights_total])
+
+                    df_esists_no_rights.write_excel(sys_wb, worksheet="Нераспределенные 2", autofit=True, column_formats=get_column_formats(df_esists_no_rights.columns))    
 
                 # Красим финальные системные листы
                 apply_final_formats(sys_wb)
