@@ -2161,6 +2161,7 @@ def _write_momu_summary_sheet(wb, df_service, df_track, label_name, licensor_nam
     num_bold_fmt   = wb.add_format({'bold': True, 'num_format': '#,##0.00', 'align': 'right', 'valign': 'vcenter'})
     yellow_head_l  = wb.add_format({'bold': True, 'bg_color': '#FFFF00', 'border': 1, 'align': 'left', 'valign': 'vcenter', 'font_size': 11})
     yellow_head_r  = wb.add_format({'bold': True, 'bg_color': '#FFFF00', 'border': 1, 'align': 'right', 'valign': 'vcenter', 'font_size': 11})
+    warning_fmt = wb.add_format({'align': 'left', 'valign': 'vcenter', 'text_wrap': True, 'font_size': 10})
 
     # --- ПАРСИНГ ИМЕНИ ЛИЦЕНЗИАРА ---
     match = re.match(r'^(\d+)', licensor_name)
@@ -2170,83 +2171,95 @@ def _write_momu_summary_sheet(wb, df_service, df_track, label_name, licensor_nam
 
     logo_path = Path(__file__).resolve().parents[1] / "media" / "logo.jpeg"
     if os.path.exists(logo_path):
-        ws.insert_image(0, 5, str(logo_path), {'x_scale': 0.1, 'y_scale': 0.1})
+        ws.insert_image(0, 6, str(logo_path), {'x_scale': 0.1, 'y_scale': 0.1})
 
     # Шапка документа
-    ws.merge_range(0, 0, 0, 3, "Отчетная ведомость ТОО «Много Музыки»", title_fmt)
-    ws.merge_range(1, 0, 1, 3, "к Лицензионному Договору", subtitle_fmt)
-    ws.merge_range(2, 0, 2, 3, licensor_name, subtitle_fmt)
-    ws.merge_range(3, 0, 3, 3, f"за период  {period_str}", subtitle_fmt)
+    #ws.set_column(0, 0, 3)
+    ws.merge_range(0, 1, 0, 4, "ОТЧЕТ О РОЯЛТИ ТОО «МНОГО МУЗЫКИ»", title_fmt)
+    ws.merge_range(1, 1, 1, 4, "к Лицензионному Договору", subtitle_fmt)
+    ws.merge_range(2, 1, 2, 4, licensor_name, subtitle_fmt)
+    ws.merge_range(3, 1, 3, 4, f"за период  {period_str}", subtitle_fmt)
 
     now = datetime.now()
     date_str = f"{now.day} {MONTHS_RU[now.month]} {now.year}"
-    ws.write(4, 0, "Алматы", subtitle_fmt) 
-    ws.write(4, 3, date_str, subtitle_fmt)
+    ws.write(5, 1, "г. Алматы", subtitle_fmt)
+    ws.write(5, 4, date_str, subtitle_fmt)
 
 
     # Таблица ведомости
-    headers = ["№ договора", "Доход, KZT", "Роялти Лицензиара, %", "К выплате Лицензиару, KZT"]
+    headers = ["№ договора", "Доход от партнеров, KZT", "Доля Лицензиара %", "Начислено до удержания налогов, KZT"]
     for col, h in enumerate(headers):
-        ws.write(6, col, h, table_head_fmt)
+        ws.write(7, col + 1, h, table_head_fmt)
     
-    ws.set_row(6, 40) 
+    ws.set_row(7, 55) 
 
     royalty_percent = NUMBERS.MOMU_BASE_RIGHTS_HOLDER_PERCENT
   
-    ws.write(7, 0, contract_code, table_cell_fmt) 
-    ws.write(7, 1, total_income, table_num_fmt) 
-    ws.write(7, 2, royalty_percent, table_cell_fmt) 
-    ws.write(7, 3, total_income * royalty_percent / 100, table_num_fmt_bold)
+    ws.write(8, 1, contract_code, table_cell_fmt) 
+    ws.write(8, 2, total_income, table_num_fmt) 
+    ws.write(8, 3, royalty_percent, table_cell_fmt) 
+    ws.write(8, 4, total_income * royalty_percent / 100, table_num_fmt_bold)
 
     # --- БЛОК ПОДПИСЕЙ ---
-    start_row = 11 
+    start_row = 12 
     signature_row = start_row 
+    max_rows = max(len(df_service), len(df_track), 1)
 
     # Лицензиар (Слева)
-    ws.write(signature_row, 0, "Лицензиар", text_fmt)
-    ws.write(signature_row + 1, 0, licensor_name, bold_fmt)
-    ws.write(signature_row + 3, 0, "_________________________")
-    ws.write(signature_row + 4, 0, "(подпись, печать)", gray_italic)
+    #ws.write(signature_row, 0, "Лицензиар", text_fmt)
+    #ws.write(signature_row + 1, 0, licensor_name, bold_fmt)
+    #ws.write(signature_row + 3, 0, "_________________________")
+    #ws.write(signature_row + 4, 0, "(подпись, печать)", gray_italic)
 
     # Лицензиат (Справа)
-    ws.write(signature_row, 3, "Лицензиат", text_fmt)
-    ws.write(signature_row + 1, 3, "ТОО «Много Музыки»", bold_fmt)
-    ws.write(signature_row + 2, 3, "Генеральный директор", text_fmt)
-    ws.write(signature_row + 3, 3, "_________________________  /Блиев А.А./", text_fmt)
-    ws.write(signature_row + 4, 3, "(подпись, печать)", gray_italic)
+    #ws.write(signature_row, 3, "Лицензиат", text_fmt)
+    #ws.write(signature_row + 1, 3, "ТОО «Много Музыки»", bold_fmt)
+    #ws.write(signature_row + 2, 3, "Генеральный директор", text_fmt)
+    #ws.write(signature_row + 3, 3, "_________________________  /Блиев А.А./", text_fmt)
+    #ws.write(signature_row + 4, 3, "(подпись, печать)", gray_italic)
 
+    
     # --- НИЖНИЕ ТАБЛИЦЫ ---
-    start_row = signature_row + 7
-
-    ws.merge_range(start_row, 0, start_row, 1, "Доход по основным сервисам", bold_fmt)
-    ws.merge_range(start_row, 3, start_row, 5, "Топ-релиз по доходу", bold_fmt)
+    ws.merge_range(start_row, 1, start_row, 2, "Доход по основным сервисам", bold_fmt)
+    ws.merge_range(start_row, 4, start_row, 5, "Доход по релизам", bold_fmt)
     start_row = start_row + 2
 
-    ws.write(start_row, 0, "Сервис", yellow_head_l)
-    ws.write(start_row, 1, "Доход", yellow_head_r)
+    ws.write(start_row, 1, "Сервис", yellow_head_l)
+    ws.write(start_row, 2, "Доход", yellow_head_r)
     for r_idx, row in enumerate(df_service.iter_rows(named=True), start=1):
-        ws.write(start_row + r_idx, 0, row.get("Сервис") or "—", text_fmt)
-        ws.write(start_row + r_idx, 1, row.get("Доход", 0.0), num_fmt)
+        ws.write(start_row + r_idx, 1, row.get("Сервис") or "—", text_fmt)
+        ws.write(start_row + r_idx, 2, row.get("Доход", 0.0), num_fmt)
 
-    ws.write(start_row, 3, "Название трека", yellow_head_l)
-    ws.write(start_row, 4, "Исполнитель", yellow_head_l)
-    ws.write(start_row, 5, "Доход", yellow_head_r)
+    ws.write(start_row, 4, "Название трека", yellow_head_l)
+    ws.write(start_row, 5, "Исполнитель", yellow_head_l)
+    ws.write(start_row, 6, "Доход", yellow_head_r)
     for r_idx, row in enumerate(df_track.iter_rows(named=True), start=1):
-        ws.write(start_row + r_idx, 3, row.get("Название трека") or "—", text_fmt)
-        ws.write(start_row + r_idx, 4, row.get("Исполнитель") or "—", text_fmt)
-        ws.write(start_row + r_idx, 5, row.get("Доход", 0.0), num_bold_fmt)
+        ws.write(start_row + r_idx, 4, row.get("Название трека") or "—", text_fmt)
+        ws.write(start_row + r_idx, 5, row.get("Исполнитель") or "—", text_fmt)
+        ws.write(start_row + r_idx, 6, row.get("Доход", 0.0), num_bold_fmt)
 
-    # Ширина колонок
-    ws.set_column(0, 0, 25)
-    ws.set_column(1, 1, 15)
-    ws.set_column(2, 2, 4)
-    ws.set_column(3, 3, 30)
-    ws.set_column(4, 4, 25)
-    ws.set_column(5, 5, 17)
+    end_of_tables_row = start_row + max_rows
+    warning_start_row = end_of_tables_row + 3
 
-
-
+   # Ширина колонок
+    ws.set_column(0, 0, 3)   # Узкий отступ для нулевой колонки
+    ws.set_column(1, 1, 15)  # Колонка 1
+    ws.set_column(2, 2, 15)  # Колонка 2
+    ws.set_column(3, 3, 15)   # Колонка 3
+    ws.set_column(4, 4, 15)  # Колонка 4
+    ws.set_column(5, 5, 15)  # Колонка 5
+    ws.set_column(6, 6, 15)  # Колонка 6 
    
+
+    txt_warning = (
+        "Внимание! Лицензиар в течение 5 (пяти) рабочих дней с даты отправки настоящего отчета обязан принять отчет либо направить мотивированные письменные возражения. Датой получения отчета считается дата его отправки. При отсутствии возражений в указанный срок отчет считается согласованным Лицензиаром."
+    )
+
+    for r in range(warning_start_row, warning_start_row + 3):
+        ws.set_row(r, 22)
+    # Объединяем 6 колонок (от 0 до 5) на 3 строки для текста предупреждения
+    ws.merge_range(warning_start_row, 1, warning_start_row + 2, 6, txt_warning, warning_fmt)
+
 
 def export_report_distribution_to_excel_momu(
     task_id: int,
@@ -2420,12 +2433,15 @@ def export_report_distribution_to_excel_momu(
                 return formats
 
             # Хелпер стилизации Excel (Шапка + ИТОГО)
+           # Хелпер стилизации Excel (Шапка + ИТОГО) — применяется только ко второму листу ("Детализация")
             def apply_final_formats(wb):
                 header_format = wb.add_format({'bold': False, 'font_size': 11, 'align': 'center', 'valign': 'vcenter', 'text_wrap': True})
                 total_format = wb.add_format({'bold': True, 'font_size': 12})
-                for worksheet in wb.worksheets():
-                    if worksheet.name == "Аналитика": 
-                        continue
+                
+                sheets = wb.worksheets()
+                # Проверяем, что в книге есть второй лист (Детализация)
+                if len(sheets) > 1:
+                    worksheet = sheets[1]  # Берем строго второй лист
                     if worksheet.dim_colmax is not None:
                         worksheet.set_column(0, worksheet.dim_colmax, 15)
                     worksheet.set_row(0, 45, header_format) 
@@ -2615,7 +2631,7 @@ def export_report_distribution_to_excel_momu(
                 )
 
                 last_day = calendar.monthrange(year, month_to)[1]
-                period_str = f"01.{month_from:02d}.{year} - {last_day}.{month_to:02d}.{year}"
+                period_str = f" с  01.{month_from:02d}.{year} по {last_day}.{month_to:02d}.{year}"
                 total_income = df_by_service[TARGET_METRIC_COL].sum()
                 label_name = df_r_local["label_name"][0] if "label_name" in df_r_local.columns else "ТОО Много Музыки"
             
@@ -2648,7 +2664,7 @@ def export_report_distribution_to_excel_momu(
                 df_momu_final = pl.concat([df_momu_total, df_momu_total_row])
 
                 # Путь и запись нового итогового файла
-                momu_summary_filepath = os.path.join(storage_dir, f"report_total_right_holders_{year}_{month_from}_{month_to}_{timestamp}.xlsx")
+                momu_summary_filepath = os.path.join(storage_dir, f"report_summary_right_holders_{year}_{month_from}_{month_to}_{timestamp}.xlsx")
                 momu_summary_wb = xlsxwriter.Workbook(momu_summary_filepath)
                 
                 df_momu_final.write_excel(
@@ -2804,6 +2820,12 @@ def export_report_distribution_to_excel(
                 JOIN label l ON l.id = rh.label_id
                 WHERE rtd.staging_id = ANY(:staging_ids)
                 {labels_condition_rights}
+                AND (
+                    rtd.original_share_percentage != 0 
+                    OR rtd.calculated_share_percentage != 0 
+                    OR rtd.final_payout_amount != 0
+                )
+
             """)
             
             df_rights = pl.read_database(rights_query, conn, execute_options={"parameters": query_params})
