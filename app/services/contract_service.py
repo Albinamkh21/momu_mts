@@ -1,11 +1,14 @@
 """ContractService — business logic for the Contract module."""
 from __future__ import annotations
 
+from asyncio.log import logger
 from typing import Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from __schemas.external_contract import ExternalContractCreateRequest
+from .document_service import DocumentService   
 
 from __crud.contract_repository import ContractNumberConflictError, ContractRepository
 from __crud.right_holder_repository import RightHolderRepository
@@ -14,8 +17,10 @@ from __schemas.contracts import ContractCreate, ContractResponse, ContractUpdate
 
 class ContractService:
     def __init__(self, db: Session):
+        self.db = db
         self.repo = ContractRepository(db)
         self.right_holder_repo = RightHolderRepository(db)
+        self.contract_repo = ContractRepository(db)
 
     @staticmethod
     def _to_response(obj) -> ContractResponse:
@@ -98,3 +103,64 @@ class ContractService:
             ) from e
         if not deleted:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Договор не найден")
+
+
+    def create_external_contract(self, payload):
+        try:
+            # 1. Ищем или создаем правообладателя
+            holder = None
+            if payload.iin_bin:
+                holder = self.right_holder_repo.get_by_iin(payload.iin_bin)
+
+            holder_data = {
+                "name": payload.name,
+                "type": payload.type,
+                "alias": payload.alias,
+                "email": payload.email,
+                "phone": payload.phone,
+                "address": payload.address,
+                "iin_bin": payload.iin_bin,
+                "full_name": payload.full_name,
+                "id_document_type": payload.id_document_type,
+                "id_document_number": payload.id_document_number,
+                "id_document_issued_by": payload.id_document_issued_by,
+                "id_document_issue_date": payload.id_document_issue_date,
+                "company_name": payload.company_name,
+                "director_name": payload.director_name,
+                "acting_basis": payload.acting_basis,
+                "iban": payload.iban,
+                "bank_name": payload.bank_name,
+                "bik": payload.bik,
+            }
+
+            if holder:
+                holder = self.right_holder_repo.update(holder.id, holder_data)
+            else:
+                holder = self.right_holder_repo.create(holder_data)
+
+            # 2. Создаем договор (direction_type приводим к верхнему регистру для CHECK constraint)
+            contract_data = {
+                "contract_number": payload.contract_number,
+                "right_holder_id": holder.id,
+                "direction_type": payload.direction_type.upper() if payload.direction_type else None,
+                "signed_date": payload.signed_date,
+                "valid_from": payload.valid_from,
+                "valid_to": payload.valid_to,
+                "status": "DRAFT",
+            }
+
+            contract = self.contract_repo.create(contract_data)
+
+            DocumentService.generate_contract_doc(
+                contract=contract, 
+                holder=holder, 
+                payload_extra=payload.model_dump()
+            )
+            
+            # Возвращаем сам объект контракта для валидации по response_model (ContractResponse)
+            return contract
+
+        except Exception as e:
+            self.db.rollback()
+            print(f"🔥 DB SAVE ERROR: {type(e).__name__}: {e}", flush=True)
+            raise

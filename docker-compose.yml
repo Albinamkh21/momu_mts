@@ -48,12 +48,15 @@ services:
     volumes:
       - ./app:/app
       - ./.env.test:/app/.env.test
+      - ./docs:/docs
     environment:
       PYTHONPATH: /app
       CELERY_BROKER_URL: ${CELERY_BROKER_URL}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
       DATABASE_URL: ${DATABASE_URL}
       FRONTEND_URL: ${FRONTEND_URL}
+      CONTRACTS_DIR: ${CONTRACTS_DIR}
+      CONTRACT_TEMPLATE_PATH: ${CONTRACT_TEMPLATE_PATH}
       
     ports:
       - "${APP_PORT}:${APP_PORT}"
@@ -90,6 +93,26 @@ services:
     depends_on:
       momu_postgres:
         condition: service_healthy
+      momu_redis:
+        condition: service_started
+    networks:
+      - momu-network
+
+  momu_beat:
+    build: .
+    container_name: momu_beat
+    restart: always
+    command: celery -A core.celery_app beat --loglevel=info
+    volumes:
+      - ./app:/app
+    environment:
+      PYTHONPATH: /app
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
+      DATABASE_URL: ${DATABASE_URL}
+    env_file:
+      - .env
+    depends_on:
       momu_redis:
         condition: service_started
     networks:

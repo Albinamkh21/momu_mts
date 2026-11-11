@@ -25,6 +25,14 @@ class ContractRepository:
             .first()
         )
 
+    def get_by_number(self, contract_number: str) -> Optional[Contract]:
+        return (
+            self.db.query(Contract)
+            .options(joinedload(Contract.right_holder))
+            .filter(Contract.contract_number == contract_number)
+            .first()
+        )
+
     def get_all(
         self,
         *,

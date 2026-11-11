@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+from __schemas.external_contract import ExternalContractCreateRequest
+from __schemas.contract_annex import ContractAnnexResponse, IncomingAnnexPayload
 from fastapi import APIRouter, Depends, Path, Query
 from sqlalchemy.orm import Session
 
@@ -19,6 +21,7 @@ from __schemas.contracts import (
     ContractUpdate,
 )
 from services.contract_service import ContractService
+from services.contract_annex_service import ContractAnnexService
 
 router = APIRouter()
 
@@ -76,3 +79,33 @@ def delete_contract(
     db: Session = Depends(get_db),
 ):
     ContractService(db).delete(contract_id)
+
+@router.post("/external", response_model=ContractResponse, status_code=201)
+def create_external_contract(
+    payload: ExternalContractCreateRequest,
+    db: Session = Depends(get_db),
+    # Здесь можно добавить зависимость проверки API-ключа внешнего сайта:
+    # api_key: str = Security(verify_external_api_key)
+):
+    """
+    Открытое/защищенное API для внешнего сайта: 
+    создает правообладателя (при необходимости), договор (draft), папку и документ.
+    """
+    service = ContractService(db)
+    return service.create_external_contract(payload)
+
+
+@router.post("/external/annex", response_model=ContractAnnexResponse, status_code=201)
+def create_external_annex(
+    payload: IncomingAnnexPayload,
+    db: Session = Depends(get_db),
+    # Здесь можно добавить зависимость проверки API-ключа внешнего сайта:
+    # api_key: str = Security(verify_external_api_key)
+):
+    """
+    Открытое/защищенное API для внешнего сайта: создает приложение (Annex) и
+    его строки (ContractAnnexItem) к уже существующему договору, а также
+    генерирует .xlsx документ приложения в папке договора.
+    """
+    service = ContractAnnexService(db)
+    return service.create_external_annex(payload)

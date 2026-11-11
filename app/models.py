@@ -749,3 +749,99 @@ class CatalogUpload(Base):
 
     label: Mapped['Label'] = relationship('Label')
     # user: Mapped['User'] = relationship('User') # Разкомментируйте при наличии модели User    
+
+
+from datetime import date
+from sqlalchemy import BigInteger, String, Date, Numeric, ForeignKey, Enum as SQLEnum, Index, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.dialects.postgresql import JSONB
+from enum import Enum as PyEnum
+
+# Возможные статусы обработки приложения
+class AnnexStatus(str, PyEnum):
+    DRAFT = "DRAFT"
+    PROCESSING = "PROCESSING"
+    PARSED = "PARSED"
+    FAILED = "FAILED"
+
+
+class ContractAnnex(Base):
+   
+    __tablename__ = "contract_annex"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    contract_id: Mapped[int] = mapped_column(
+        BigInteger, 
+        ForeignKey("contract.id", ondelete="CASCADE"), 
+        nullable=False, 
+        index=True
+    )
+    annex_number: Mapped[str] = mapped_column(String(50), nullable=False)
+    doc_date: Mapped[date] = mapped_column(Date, nullable=False)
+    
+    status: Mapped[AnnexStatus] = mapped_column(
+        SQLEnum(AnnexStatus, name="annex_status_enum"), 
+        nullable=False, 
+        default=AnnexStatus.DRAFT
+    )
+    
+    
+    payload_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    
+    # Путь к сгенерированному файлу .docx
+    file_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # Связи (Relationships)
+    contract = relationship("Contract", backref="annexes")
+    items: Mapped[list["ContractAnnexItem"]] = relationship(
+        "ContractAnnexItem", 
+        back_populates="annex", 
+        cascade="all, delete-orphan",
+        order_by="ContractAnnexItem.line_number"
+    )
+
+    __table_args__ = (
+       
+        UniqueConstraint("contract_id", "annex_number", name="uq_contract_annex_number"),
+    )
+
+
+class ContractAnnexItem(Base):
+    """
+    Строки табличной части приложения (произведения, один автор музыки, один автор текста).
+    """
+    __tablename__ = "contract_annex_items"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    annex_id: Mapped[int] = mapped_column(
+        BigInteger, 
+        ForeignKey("contract_annex.id", ondelete="CASCADE"), 
+        nullable=False, 
+        index=True
+    )
+    
+    line_number: Mapped[int] = mapped_column(nullable=False) # № п/п
+    code: Mapped[str | None] = mapped_column(String(100), nullable=True) # ISRC / Код
+    track_title: Mapped[str] = mapped_column(String(255), nullable=False) # Название песни
+    artist_name: Mapped[str] = mapped_column(String(255), nullable=False) # Исполнитель
+    
+    # Смежные права
+    related_rights_percent: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
+    
+    # Автор музыки (Composer) и его процент
+    composer_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    composer_percent: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
+    
+    # Автор текста (Lyricist) и его процент
+    lyricist_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    lyricist_percent: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
+    
+    # Связь с боевым треком в каталоге (заполняется при парсинге)
+    track_id: Mapped[int | None] = mapped_column(
+        BigInteger, 
+        ForeignKey("track.id", ondelete="SET NULL"), 
+        nullable=True, 
+        index=True
+    )
+
+    annex: Mapped["ContractAnnex"] = relationship("ContractAnnex", back_populates="items")

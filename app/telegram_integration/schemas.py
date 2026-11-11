@@ -1,0 +1,3 @@
+from __schemas.external_contract import ExternalContractCreateRequest
+
+IncomingContractPayload = ExternalContractCreateRequest

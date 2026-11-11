@@ -111,3 +111,7 @@ class RightHolderRepository:
             self.db.rollback()
             raise
         return True
+
+    def get_by_iin(self, iin: str) -> Optional[RightHolder]:
+
+        return self.db.query(RightHolder).filter(RightHolder.iin_bin == iin).first()
