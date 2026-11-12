@@ -9,11 +9,12 @@ export const ContractGrid = ({
   onEdit, 
   onDelete, 
   onViewRightHolder,
+  onViewAnnexes,
   searchTrigger,
 }) => {
   const columnDefs = useMemo(
-    () => getContractColumns({ onView, onEdit, onViewRightHolder }),
-    [onView, onEdit, onViewRightHolder]
+    () => getContractColumns({ onView, onEdit, onViewRightHolder, onViewAnnexes }),
+    [onView, onEdit, onViewRightHolder, onViewAnnexes]
   );
 
   return (

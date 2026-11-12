@@ -9,7 +9,7 @@ export function MainLayout({ children, currentPage, currentDictKey, currentUser,
   const isCatalogDiffActive = currentPage === 'catalogDiff';
   const isCatalogActive = isCatalogUploadActive || isCatalogDiffActive;
   const isRightHoldersActive = currentPage === 'rightHolders';
-  const isContractsActive = currentPage === 'contracts';
+  const isContractsActive = currentPage === 'contracts' || currentPage === 'contractAnnexes';
   const isReportActive = currentPage === 'report';
   const isCreateReportActive = currentPage === 'createReport';
   const isReportHistoryActive = currentPage === 'reportHistory';

@@ -3,7 +3,7 @@ import { CONTRACT_STATUS_OPTIONS } from './contractFilterFields';
 
 const STATUS_LABELS = Object.fromEntries(CONTRACT_STATUS_OPTIONS.map((o) => [o.value, o.label]));
 
-export const getContractColumns = ({ onView, onEdit, onViewRightHolder }) => [
+export const getContractColumns = ({ onView, onEdit, onViewRightHolder, onViewAnnexes }) => [
   { field: 'id', headerName: 'ID', width: 90, sortable: true },
   {
     field: 'contract_number',
@@ -47,13 +47,21 @@ export const getContractColumns = ({ onView, onEdit, onViewRightHolder }) => [
   { field: 'valid_to', headerName: 'Действительна по', width: 130, sortable: true },
   {
     headerName: '',
-    width: 100,
+    width: 140,
     sortable: false,
     filter: false,
     cellRenderer: (params) => {
       if (!params.data) return null;
       return (
         <>
+          <button
+            type="button"
+            className="btn-sm"
+            onClick={() => onViewAnnexes && onViewAnnexes(params.data.id, params.data.contract_number)}
+            title="Приложения к договору"
+          >
+            📎
+          </button>
           <button
             type="button"
             className="btn-sm"

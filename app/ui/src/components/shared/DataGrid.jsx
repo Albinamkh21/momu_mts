@@ -87,6 +87,12 @@ export const DataGrid = ({
     <div className="ag-theme-alpine" style={{ height: '100%', width: '100%' }}>
       <AgGridReact
         columnDefs={columnDefs}
+        // Без явного minWidth flex-колонки (flex: N) могут сжаться до нескольких
+        // пикселей, когда суммарная ширина колонок не помещается в контейнер —
+        // тогда клик по узкому заголовку либо не долетает до сортировки, либо
+        // попадает на соседнюю колонку. Горизонтальный скролл в этом случае —
+        // ожидаемое поведение, а не баг.
+        defaultColDef={{ minWidth: 120 }}
         rowModelType="infinite"
         pagination={true}
         paginationPageSize={pageSize}

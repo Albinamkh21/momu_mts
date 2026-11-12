@@ -7,19 +7,29 @@
 
 ```
 features/contracts/
-├── ContractPage.jsx              # Главная страница
+├── ContractPage.jsx              # Главная страница (список договоров)
+├── ContractAnnexPage.jsx         # Страница приложений (ContractAnnex) конкретного договора
+├── ContractAnnexItems.jsx        # Список произведений (ContractAnnexItem) открытого приложения
 ├── contracts.css                 # Стили
 ├── api/
-│   └── contracts.api.js          # API функции
+│   ├── contracts.api.js          # API функции для Contract
+│   └── contractAnnex.api.js      # API функции для ContractAnnex / ContractAnnexItem
 ├── components/
-│   ├── ContractGrid.jsx          # Компонент таблицы
-│   ├── contractColumns.jsx       # Описание колонок
-│   └── contractFilterFields.js   # Поля фильтра
+│   ├── ContractGrid.jsx          # Компонент таблицы договоров
+│   ├── contractColumns.jsx       # Описание колонок договоров
+│   ├── contractFilterFields.js   # Поля фильтра договоров
+│   ├── ContractAnnexGrid.jsx     # Компонент таблицы приложений
+│   ├── contractAnnexColumns.jsx  # Описание колонок приложений
+│   ├── contractAnnexFilterFields.js # Поля фильтра + статусы приложений
+│   └── annexItemColumns.jsx      # Описание колонок произведений приложения
 ├── editor/
 │   ├── ContractForm.jsx          # Форма договора с RightHolder selector
-│   └── RightHolderSelector.jsx   # Компонент выбора/создания правообладателя
+│   ├── RightHolderSelector.jsx   # Компонент выбора/создания правообладателя
+│   ├── ContractAnnexForm.jsx     # Форма шапки приложения (+ начальные произведения при создании)
+│   └── AnnexItemForm.jsx         # Инлайн-форма добавления/редактирования одного произведения
 └── hooks/
-    └── useContracts.js           # Хук для управления состоянием
+    ├── useContracts.js           # Хук для управления состоянием списка договоров
+    └── useContractAnnexes.js     # Хук для управления состоянием списка приложений
 ```
 
 ## Основные Компоненты
@@ -96,7 +106,35 @@ GET    /v1/contracts/{id}      # Детали договора
 POST   /v1/contracts           # Создание договора
 PUT    /v1/contracts/{id}      # Обновление договора
 DELETE /v1/contracts/{id}      # Удаление договора
+
+GET    /v1/contracts/{id}/annexes                           # Список приложений договора
+POST   /v1/contracts/{id}/annexes                           # Создание приложения (с начальными произведениями)
+GET    /v1/contracts/{id}/annexes/{annexId}                 # Детали приложения (с произведениями)
+PUT    /v1/contracts/{id}/annexes/{annexId}                 # Обновление шапки приложения
+DELETE /v1/contracts/{id}/annexes/{annexId}                 # Удаление приложения
+
+POST   /v1/contracts/{id}/annexes/{annexId}/items           # Добавление произведения
+PUT    /v1/contracts/{id}/annexes/{annexId}/items/{itemId}  # Редактирование произведения
+DELETE /v1/contracts/{id}/annexes/{annexId}/items/{itemId}  # Удаление произведения
 ```
+
+## Модуль Contract Annex (приложения к договору)
+
+`ContractAnnex` всегда существует только в связке с `Contract`, поэтому страница приложений
+открывается из списка договоров (кнопка «📎» в таблице `ContractGrid`) и всегда работает с
+конкретным `contractId`.
+
+- **ContractAnnexPage.jsx** — список приложений договора (`ContractAnnexGrid`) с CRUD: создание,
+  просмотр, редактирование шапки (`annex_number`, `doc_date`, `status`), удаление. При создании
+  приложения форма дополнительно собирает начальный список произведений (бэкенд требует хотя бы
+  одну строку). После создания приложение сразу открывается в режиме просмотра.
+- **ContractAnnexItems.jsx** — не отдельная страница, а встраиваемый список произведений
+  (`ContractAnnexItem`) открытого приложения с собственным CRUD (добавление/редактирование/удаление
+  строки через `AnnexItemForm.jsx`). Номер строки (`line_number`) при добавлении новой строки
+  назначается сервером автоматически.
+
+Вся работа с БД выполняется через `ContractAnnexRepository`/`ContractAnnexService` (бэкенд), без
+прямых запросов к ORM из эндпоинтов.
 
 ## Интеграция с RightHolders
 

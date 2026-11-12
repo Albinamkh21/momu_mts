@@ -8,6 +8,15 @@ from sqlalchemy.orm import joinedload, Session
 
 from models import Contract
 
+# Whitelisted sort columns to avoid arbitrary ORDER BY injection from client input.
+SORTABLE_COLUMNS = {
+    "id": Contract.id,
+    "contract_number": Contract.contract_number,
+    "status": Contract.status,
+    "valid_from": Contract.valid_from,
+    "valid_to": Contract.valid_to,
+}
+
 
 class ContractNumberConflictError(Exception):
     """Raised when a contract with the same contract_number already exists."""
@@ -40,6 +49,8 @@ class ContractRepository:
         status: Optional[str] = None,
         direction_type: Optional[str] = None,
         search: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_dir: str = "desc",
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[Contract], int]:
@@ -55,7 +66,9 @@ class ContractRepository:
             query = query.filter(Contract.contract_number.ilike(f"%{search}%"))
 
         total = query.count()
-        items = query.order_by(Contract.id.desc()).offset(offset).limit(limit).all()
+        order_column = SORTABLE_COLUMNS.get(sort_by, Contract.id)
+        order_clause = order_column.asc() if sort_dir == "asc" else order_column.desc()
+        items = query.order_by(order_clause).offset(offset).limit(limit).all()
         return items, total
 
     def create(self, data: dict[str, Any]) -> Contract:

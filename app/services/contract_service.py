@@ -43,6 +43,8 @@ class ContractService:
         status_: Optional[str] = None,
         direction_type: Optional[str] = None,
         search: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_dir: str = "desc",
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[ContractResponse], int]:
@@ -51,6 +53,8 @@ class ContractService:
             status=status_,
             direction_type=direction_type,
             search=search,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
             limit=limit,
             offset=offset,
         )

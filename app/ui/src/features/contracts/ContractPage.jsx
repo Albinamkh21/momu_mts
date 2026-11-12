@@ -22,7 +22,7 @@ const getInitialFilters = () => {
   return { search: '', status: '', direction_type: '', rights_holder_id: '' };
 };
 
-export const ContractPage = ({ onViewRightHolder }) => {
+export const ContractPage = ({ onViewRightHolder, onViewAnnexes }) => {
   const { loading, fetchContractsData } = useContracts();
   const [filters, setFilters] = useState(getInitialFilters);
   const [searchTrigger, setSearchTrigger] = useState(0);
@@ -99,6 +99,7 @@ export const ContractPage = ({ onViewRightHolder }) => {
         onEdit={openEditEditor}
         onDelete={handleDelete}
         onViewRightHolder={onViewRightHolder}
+        onViewAnnexes={onViewAnnexes}
       />
     </CrudPageLayout>
   );

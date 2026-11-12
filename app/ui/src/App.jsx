@@ -6,6 +6,7 @@ import { TrackDetailPage } from './features/tracks/TrackDetailPage';
 import { PersonDetailPage } from './features/tracks/PersonDetailPage';
 import { RightHoldersPage } from './features/rightHolders/RightHoldersPage';
 import { ContractPage } from './features/contracts/ContractPage';
+import { ContractAnnexPage } from './features/contracts/ContractAnnexPage';
 import { CatalogPage } from './features/catalog/CatalogPage';
 import { CatalogDiffPage } from './features/catalog/CatalogDiffPage';
 import { ReportPage } from './features/report/ReportPage';
@@ -65,6 +66,7 @@ function App() {
   const goToRightHolders = () => setPage({ type: 'rightHolders', prev: page });
   const goToRightHolderView = (rightHolderId) => setPage({ type: 'rightHolders', viewRightHolderId: rightHolderId, prev: page });
   const goToContracts = () => setPage({ type: 'contracts', prev: page });
+  const goToContractAnnexes = (contractId) => setPage({ type: 'contractAnnexes', contractId, prev: page });
   const goToReport = () => setPage({ type: 'report', prev: page });
   const goToCreateReport = () => setPage({ type: 'createReport', prev: page });
   const goToReportHistory = () => setPage({ type: 'reportHistory', prev: page });
@@ -173,7 +175,11 @@ function App() {
           )}
 
           {page.type === 'contracts' && (
-            <ContractPage onViewRightHolder={goToRightHolderView} />
+            <ContractPage onViewRightHolder={goToRightHolderView} onViewAnnexes={goToContractAnnexes} />
+          )}
+
+          {page.type === 'contractAnnexes' && (
+            <ContractAnnexPage contractId={page.contractId} onBack={goBack} />
           )}
 
           {page.type === 'report' && (
