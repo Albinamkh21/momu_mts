@@ -23,10 +23,18 @@ export const useRightHolders = () => {
 
       const data = await getRightHolders(params);
       return { items: data.items, total: data.total };
-    } catch (err) {
-      console.error('Ошибка загрузки правообладателей:', err);
+    } 
+    catch (err) {
+      console.error('Детали ошибки API:', {
+        status: err.response?.status,
+        data: err.response?.data,
+        message: err.message,
+        config: err.config, // Покажет точный URL и параметры, которые улетели на бэкенд
+      });
       return { items: [], total: 0 };
-    } finally {
+    } 
+    
+    finally {
       setLoading(false);
     }
   }, []);

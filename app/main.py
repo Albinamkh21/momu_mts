@@ -1,8 +1,11 @@
 from contextlib import asynccontextmanager
 import logging
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi import HTTPException
 from api.v1.api import api_router
 from api.v1.endpoints.tracks import router as tracks_router
 from api.v1.endpoints.drafts import router as drafts_router
@@ -24,7 +27,14 @@ async def lifespan(app: FastAPI):
     yield
 
 
+
 app = FastAPI(title="MoMu Management System", lifespan=lifespan)
+
+
+import os
+from fastapi import HTTPException
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 app.include_router(api_router, prefix="/api/v1")
 app.include_router(tracks_router, prefix="/api")

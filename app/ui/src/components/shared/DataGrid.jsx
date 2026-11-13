@@ -54,6 +54,7 @@ export const DataGrid = ({
     setupDatasource(params.api);
   };
 
+
   const onSortChanged = (event) => {
     // getState().sort возвращает { sortModel: [...] }, а не сам массив — используем
     // getColumnState(), который даёт плоский список колонок с их sort/sortIndex.
@@ -68,10 +69,13 @@ export const DataGrid = ({
     onSortChange && onSortChange(normalizedSortModel);
 
     if (gridApiRef.current) {
+      // Убираем setupDatasource(gridApiRef.current), чтобы не плодить дублирующие запросы.
+      // paginationGoToFirstPage() сама перезапросит данные через текущий datasource 
+      // с учетом уже обновленного lastSortModelRef.current.
       gridApiRef.current.paginationGoToFirstPage();
-      setupDatasource(gridApiRef.current);
     }
   };
+
 
   // Запускается при монтировании и при изменении searchTrigger ("Найти")
   useEffect(() => {

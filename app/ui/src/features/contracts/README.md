@@ -79,6 +79,8 @@ features/contracts/
 | signed_date | date | нет | Дата подписи договора |
 | valid_from | date | нет | Дата начала действия |
 | valid_to | date | нет | Дата конца действия |
+| file_path | string | нет | Папка со сгенерированным файлом договора (только для чтения) |
+| file_name | string | нет | Имя сгенерированного файла договора (.docx, только для чтения) |
 
 ## Фильтры
 
@@ -106,6 +108,7 @@ GET    /v1/contracts/{id}      # Детали договора
 POST   /v1/contracts           # Создание договора
 PUT    /v1/contracts/{id}      # Обновление договора
 DELETE /v1/contracts/{id}      # Удаление договора
+POST   /v1/contracts/{id}/open-folder  # Открыть папку договора в файловом менеджере сервера
 
 GET    /v1/contracts/{id}/annexes                           # Список приложений договора
 POST   /v1/contracts/{id}/annexes                           # Создание приложения (с начальными произведениями)
@@ -121,7 +124,7 @@ DELETE /v1/contracts/{id}/annexes/{annexId}/items/{itemId}  # Удаление �
 ## Модуль Contract Annex (приложения к договору)
 
 `ContractAnnex` всегда существует только в связке с `Contract`, поэтому страница приложений
-открывается из списка договоров (кнопка «📎» в таблице `ContractGrid`) и всегда работает с
+открывается из списка договоров (кнопка «📌» в таблице `ContractGrid`) и всегда работает с
 конкретным `contractId`.
 
 - **ContractAnnexPage.jsx** — список приложений договора (`ContractAnnexGrid`) с CRUD: создание,

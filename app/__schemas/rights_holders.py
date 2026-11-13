@@ -12,6 +12,8 @@ class RightsHolderType(str, Enum):
     INDIVIDUAL = "INDIVIDUAL"
     COMPANY = "COMPANY"
     IP = "IP"
+    UNKNOWN = "UNKNOWN"
+    LABEL = "LABEL"
 
 
 class RightsHolderBase(BaseModel):

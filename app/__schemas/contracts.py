@@ -64,6 +64,8 @@ class ContractResponse(BaseModel):
     valid_to: Optional[datetime.date] = None
     status: ContractStatus
     direction_type: Optional[ContractDirectionType] = None
+    file_path: Optional[str] = Field(None, description="Папка со сгенерированным файлом договора")
+    file_name: Optional[str] = Field(None, description="Имя сгенерированного файла договора (.docx)")
 
     model_config = {"from_attributes": True, "populate_by_name": True}
 

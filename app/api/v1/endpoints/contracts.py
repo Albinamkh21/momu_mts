@@ -17,8 +17,9 @@ from __schemas.contract_annex import (
     ContractAnnexUpdate,
     IncomingAnnexPayload,
 )
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Path, Query, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_db
 from __schemas.contracts import (
@@ -224,3 +225,23 @@ def create_external_annex(
     """
     service = ContractAnnexService(db)
     return service.create_external_annex(payload)
+
+
+
+@router.post("/{contract_id}/open-folder", status_code=200)
+def open_contract_folder(
+    contract_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Открывает папку указанного договора на сервере/в системе.
+    """
+    service = ContractService(db) # (или как у вас называется класс сервиса для договоров)
+    return service.open_folder(contract_id)
+
+
+@router.get("/contracts/{contract_id}/download")
+def download_contract(contract_id: int, db: Session = Depends(get_db)):
+    service = ContractService(db)
+    file_path, file_name = service.get_contract_file_path(contract_id)
+    return FileResponse(file_path, filename=file_name)

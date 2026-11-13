@@ -480,7 +480,7 @@ class Release(Base):
 class RightHolder(Base):
     __tablename__ = 'right_holder'
     __table_args__ = (
-        CheckConstraint("type IN ('INDIVIDUAL', 'COMPANY', 'IP')", name='right_holder_type_check'),
+        CheckConstraint("type IN ('INDIVIDUAL', 'COMPANY', 'IP', 'UNKNOWN', 'LABEL')", name='right_holder_type_check'),
         ForeignKeyConstraint(['label_id'], ['label.id'], name='right_holder_label_id_fkey'),
         PrimaryKeyConstraint('id', name='right_holder_pkey'),
         UniqueConstraint('name', name='right_holder_name_key'),
@@ -584,9 +584,20 @@ class Contract(Base):
     valid_to: Mapped[Optional[datetime.date]] = mapped_column(Date)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'DRAFT'"))
     direction_type: Mapped[Optional[str]] = mapped_column(String(20))
+    # Папка (file_path) и имя (file_name) сгенерированного файла договора (.docx) на диске.
+    file_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    file_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     right_holder: Mapped['RightHolder'] = relationship('RightHolder', back_populates='contract')
     track_right: Mapped[list['TrackRight']] = relationship('TrackRight', back_populates='contract')
+
+    annexes: Mapped[list['ContractAnnex']] = relationship(
+        'ContractAnnex', 
+        back_populates='contract', 
+        cascade='all, delete-orphan',
+        passive_deletes=True
+    )
+    
 
 
 class Report(Base):
@@ -791,13 +802,16 @@ class ContractAnnex(Base):
     # Путь к сгенерированному файлу .docx
     file_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
-    # Связи (Relationships)
-    contract = relationship("Contract", backref="annexes")
+
+    contract: Mapped['Contract'] = relationship(
+        'Contract', 
+        back_populates='annexes'
+    )
     items: Mapped[list["ContractAnnexItem"]] = relationship(
         "ContractAnnexItem", 
         back_populates="annex", 
         cascade="all, delete-orphan",
-        order_by="ContractAnnexItem.line_number"
+        order_by="ContractAnnexItem.line_number",passive_deletes=True
     )
 
     __table_args__ = (

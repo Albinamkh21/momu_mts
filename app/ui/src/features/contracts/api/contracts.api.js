@@ -23,3 +23,14 @@ export const updateContract = async (id, payload) => {
 export const deleteContract = async (id) => {
   await httpClient.delete(`/v1/contracts/${id}`);
 };
+
+export const openContractFolder = async (id) => {
+  const { data } = await httpClient.post(`/v1/contracts/${id}/open-folder`);
+  return data;
+};
+export const downloadContract = async (id) => {
+  const { data } = await httpClient.get(`/v1/contracts/${id}/download`, {
+    responseType: 'blob',
+  });
+  return data;
+};

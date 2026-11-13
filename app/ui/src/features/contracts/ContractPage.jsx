@@ -4,7 +4,7 @@ import { ContractGrid } from './components/ContractGrid';
 import { CrudPageLayout } from '../../components/shared/CrudPageLayout';
 import { getContractFilterFields } from './components/contractFilterFields';
 import { ContractForm } from './editor/ContractForm';
-import { deleteContract } from './api/contracts.api';
+import { deleteContract, openContractFolder } from './api/contracts.api';
 import { getRightHolders } from '../rightHolders/api/rightHolders.api';
 import './contracts.css';
 
@@ -69,6 +69,44 @@ export const ContractPage = ({ onViewRightHolder, onViewAnnexes }) => {
     }
   };
 
+  const handleOpenFolder = (contract) => {
+    setActionError('');
+    if (!contract.file_path || !contract.file_name) {
+      setActionError('Файл или папка договора не найдены в данных.');
+      return;
+    }
+    // Формируем ссылку на бэкенд (порт 8000), а не на Vite (5173)
+    const webPath = contract.file_path.replace(/^\/docs/, '/files');
+    const fileUrl = `http://localhost:8000${webPath}/${contract.file_name}`;
+    
+    // Открываем в новом окне
+    window.open(fileUrl, '_blank');
+  };
+
+  const handleDownloadContract = async (contract) => {
+  setActionError('');
+  try {
+    const blob = await downloadContract(contract.id);
+    
+    // Создаем временный URL для полученного блоба
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    
+    // Указываем имя файла (можно взять из данных контракта или заголовоков)
+    link.download = contract.file_name || `Договор_${contract.contract_number}.docx`;
+    
+    document.body.appendChild(link);
+    link.click();
+    
+    // Очищаем за собой
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  } catch (err) {
+    setActionError(err.response?.data?.detail || 'Не удалось скачать файл договора.');
+  }
+};
+  
   return (
     <CrudPageLayout
       className="contracts-page"
@@ -100,6 +138,8 @@ export const ContractPage = ({ onViewRightHolder, onViewAnnexes }) => {
         onDelete={handleDelete}
         onViewRightHolder={onViewRightHolder}
         onViewAnnexes={onViewAnnexes}
+        onOpenFolder={handleOpenFolder}
+        onDownloadContract={handleDownloadContract}
       />
     </CrudPageLayout>
   );

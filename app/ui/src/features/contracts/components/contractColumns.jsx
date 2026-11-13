@@ -3,12 +3,12 @@ import { CONTRACT_STATUS_OPTIONS } from './contractFilterFields';
 
 const STATUS_LABELS = Object.fromEntries(CONTRACT_STATUS_OPTIONS.map((o) => [o.value, o.label]));
 
-export const getContractColumns = ({ onView, onEdit, onViewRightHolder, onViewAnnexes }) => [
-  { field: 'id', headerName: 'ID', width: 90, sortable: true },
+export const getContractColumns = ({ onView, onEdit, onViewRightHolder, onViewAnnexes, onOpenFolder }) => [
+  { field: 'id', headerName: 'ID', width: 70, sortable: true },
   {
     field: 'contract_number',
     headerName: 'Номер договора',
-    flex: 1.5,
+    flex: 0.56, // 👈 Уменьшили ширину еще на 30% (было 0.8)
     sortable: true,
     cellRenderer: (params) => {
       if (!params.data) return <span style={{ color: '#aaa' }}>Загрузка...</span>;
@@ -22,7 +22,7 @@ export const getContractColumns = ({ onView, onEdit, onViewRightHolder, onViewAn
   {
     field: 'right_holder_name',
     headerName: 'Правообладатель',
-    flex: 1.5,
+    flex: 1.02, // 👈 Уменьшили ширину еще на 15% (было 1.2)
     sortable: false,
     cellRenderer: (params) => {
       if (!params.data) return <span style={{ color: '#aaa' }}>Загрузка...</span>;
@@ -39,28 +39,39 @@ export const getContractColumns = ({ onView, onEdit, onViewRightHolder, onViewAn
   {
     field: 'status',
     headerName: 'Статус',
-    width: 130,
+    width: 120,
     sortable: true,
     valueFormatter: (p) => STATUS_LABELS[p.value] || p.value,
   },
-  { field: 'valid_from', headerName: 'Действительна с', width: 130, sortable: true },
-  { field: 'valid_to', headerName: 'Действительна по', width: 130, sortable: true },
+  { field: 'valid_from', headerName: 'Действует с', width: 120, sortable: true },
+  { field: 'valid_to', headerName: 'Действует до', width: 120, sortable: true },
   {
     headerName: '',
-    width: 140,
+    width: 220, // 👈 Расширили колонку действий, чтобы поместились все иконки
     sortable: false,
     filter: false,
     cellRenderer: (params) => {
       if (!params.data) return null;
       return (
         <>
+          {/* Кнопка перехода к папке договора */}
+          <button
+            type="button"
+            className="btn-sm"
+            onClick={() => onOpenFolder && onOpenFolder(params.data)}
+            title="Открыть папку договора"
+            style={{ marginRight: '0.25rem' }}
+          >
+            📁
+          </button>
           <button
             type="button"
             className="btn-sm"
             onClick={() => onViewAnnexes && onViewAnnexes(params.data.id, params.data.contract_number)}
             title="Приложения к договору"
+            style={{ marginRight: '0.25rem' }}
           >
-            📎
+            📌
           </button>
           <button
             type="button"

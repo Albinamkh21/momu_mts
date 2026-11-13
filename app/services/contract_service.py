@@ -1,7 +1,11 @@
 """ContractService — business logic for the Contract module."""
 from __future__ import annotations
 
+import os
+import platform
+import subprocess
 from asyncio.log import logger
+from pathlib import Path
 from typing import Optional
 
 from fastapi import HTTPException, status
@@ -34,6 +38,8 @@ class ContractService:
             valid_to=obj.valid_to,
             status=obj.status,
             direction_type=obj.direction_type,
+            file_path=obj.file_path,
+            file_name=obj.file_name,
         )
 
     def list(
@@ -67,14 +73,15 @@ class ContractService:
         return self._to_response(obj)
 
     def create(self, payload: ContractCreate) -> ContractResponse:
-        if self.right_holder_repo.get_by_id(payload.rights_holder_id) is None:
+        holder = self.right_holder_repo.get_by_id(payload.rights_holder_id)
+        if holder is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Правообладатель не найден",
             )
 
         data = payload.model_dump(exclude={"rights_holder_id"})
-        data["right_holder_id"] = payload.rights_holder_id
+        data["right_holder_id"] = holder.id
         try:
             obj = self.repo.create(data)
         except ContractNumberConflictError as e:
@@ -82,10 +89,40 @@ class ContractService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Договор с таким номером уже существует",
             ) from e
-        return self._to_response(obj)
+
+        response_data = self._to_response(obj)
+
+        # Генерация документа договора
+        try:
+            generated_path = DocumentService.generate_contract_doc(
+                contract=obj,
+                holder=holder,
+                payload_extra=payload.model_dump(),
+            )
+            path_obj = Path(generated_path)
+            obj = self.repo.update(
+                obj.id,
+                {"file_path": str(path_obj.parent), "file_name": path_obj.name},
+            )
+            response_data = self._to_response(obj)
+        except Exception as exc:
+            error_msg = f"Договор сохранен в БД (ID: {obj.id}), но не удалось сгенерировать файл документа: {exc}"
+            print(f"⚠️ {error_msg}", flush=True)
+            
+            # Передаем предупреждение в ответ фронтенду/клиенту
+            if hasattr(response_data, "warning"):
+                response_data.warning = error_msg
+
+        return response_data
 
     def update(self, contract_id: int, payload: ContractUpdate) -> ContractResponse:
         data = payload.model_dump(exclude_unset=True)
+
+        existing = self.repo.get_by_id(contract_id)
+        if existing is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Договор не найден")
+        old_file_path, old_file_name = existing.file_path, existing.file_name
+
         try:
             obj = self.repo.update(contract_id, data)
         except ContractNumberConflictError as e:
@@ -95,19 +132,76 @@ class ContractService:
             ) from e
         if obj is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Договор не найден")
+
+        # Перегенерация файла договора с учетом новых данных
+        holder = obj.right_holder
+        if holder is not None:
+            try:
+                generated_path = DocumentService.generate_contract_doc(
+                    contract=obj,
+                    holder=holder,
+                    payload_extra=data,
+                )
+                new_path_obj = Path(generated_path)
+                obj = self.repo.update(
+                    contract_id,
+                    {"file_path": str(new_path_obj.parent), "file_name": new_path_obj.name},
+                )
+
+                # Если номер договора/правообладатель изменились и файл переехал
+                # в другую папку — удаляем старый файл, чтобы не плодить копии.
+                if old_file_path and old_file_name:
+                    old_full_path = Path(old_file_path) / old_file_name
+                    if old_full_path != new_path_obj and old_full_path.exists():
+                        old_full_path.unlink(missing_ok=True)
+            except Exception as exc:
+                print(f"⚠️ Не удалось перегенерировать файл договора: {exc}", flush=True)
+
         return self._to_response(obj)
 
     def delete(self, contract_id: int) -> None:
+        obj = self.repo.get_by_id(contract_id)
+        if obj is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Договор не найден")
+
+        holder = obj.right_holder
+
+        # Собираем пути к файлам приложений ДО удаления записи из БД
+        annex_file_paths = [annex.file_path for annex in obj.annexes if annex.file_path]
+
         try:
+            # БД и SQLAlchemy сами каскадно удалят приложения и их строки
             deleted = self.repo.delete(contract_id)
         except IntegrityError as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Договор используется в других данных и не может быть удалён",
+                detail="Договор используется в других связанных данных и не может быть удалён",
             ) from e
+
         if not deleted:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Договор не найден")
 
+ 
+        if holder:
+            try:
+                contract_dir = DocumentService._get_contract_dir(obj, holder)
+                
+                # 1. Удаляем файл договора (.docx)
+                contract_file = contract_dir / f"Договор_{obj.contract_number}.docx"
+                if contract_file.exists():
+                    contract_file.unlink(missing_ok=True)
+                    print(f"🗑️ Удален файл договора: {contract_file}", flush=True)
+
+                # 2. Удаляем файлы приложений (.xlsx)
+                for path_str in annex_file_paths:
+                    if path_str:
+                        annex_file = Path(path_str)
+                        if annex_file.exists():
+                            annex_file.unlink(missing_ok=True)
+                            print(f"🗑️ Удален файл приложения: {annex_file}", flush=True)
+
+            except Exception as exc:
+                print(f"⚠️ Ошибка при удалении файлов с диска: {exc}", flush=True)
 
     def create_external_contract(self, payload):
         try:
@@ -155,10 +249,15 @@ class ContractService:
 
             contract = self.contract_repo.create(contract_data)
 
-            DocumentService.generate_contract_doc(
+            generated_path = DocumentService.generate_contract_doc(
                 contract=contract, 
                 holder=holder, 
                 payload_extra=payload.model_dump()
+            )
+            path_obj = Path(generated_path)
+            contract = self.contract_repo.update(
+                contract.id,
+                {"file_path": str(path_obj.parent), "file_name": path_obj.name},
             )
             
             # Возвращаем сам объект контракта для валидации по response_model (ContractResponse)
@@ -168,3 +267,14 @@ class ContractService:
             self.db.rollback()
             print(f"🔥 DB SAVE ERROR: {type(e).__name__}: {e}", flush=True)
             raise
+
+    def get_contract_file_path(self, contract_id: int) -> tuple[str, str]:
+        obj = self.repo.get_by_id(contract_id)
+        if obj is None or not obj.file_path or not obj.file_name:
+            raise HTTPException(status_code=404, detail="Договор или файл не найден")
+
+        target_path = os.path.join(obj.file_path, obj.file_name)
+        if not os.path.exists(target_path):
+            raise HTTPException(status_code=404, detail="Файл физически отсутствует на сервере")
+
+        return target_path, obj.file_name
