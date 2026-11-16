@@ -48,3 +48,10 @@ export const updateAnnexItem = async (contractId, annexId, itemId, payload) => {
 export const deleteAnnexItem = async (contractId, annexId, itemId) => {
   await httpClient.delete(`/v1/contracts/${contractId}/annexes/${annexId}/items/${itemId}`);
 };
+
+export const downloadContractAnnex = async (contractId, annexId) => {
+  const { data } = await httpClient.get(`/v1/contracts/${contractId}/annexes/${annexId}/download`, {
+    responseType: 'blob',
+  });
+  return data;
+};

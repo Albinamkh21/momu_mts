@@ -3,7 +3,8 @@
 Endpoint -> Controller (this router) -> ContractService -> ContractRepository -> DB
 """
 from __future__ import annotations
-
+import os
+from fastapi.responses import FileResponse
 from typing import Optional
 
 from __schemas.external_contract import ExternalContractCreateRequest
@@ -245,3 +246,20 @@ def download_contract(contract_id: int, db: Session = Depends(get_db)):
     service = ContractService(db)
     file_path, file_name = service.get_contract_file_path(contract_id)
     return FileResponse(file_path, filename=file_name)
+
+@router.get("/{contract_id}/annexes/{annex_id}/download")
+def download_contract_annex(
+    contract_id: int, 
+    annex_id: int, 
+    db: Session = Depends(get_db)
+):
+    service = ContractAnnexService(db)
+    file_path = service.get_annex_file_path(contract_id, annex_id)
+
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail="Файл не найден на диске")
+
+    
+    filename = os.path.basename(file_path)
+
+    return FileResponse(file_path, filename=filename)

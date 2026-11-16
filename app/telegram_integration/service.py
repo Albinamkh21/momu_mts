@@ -1,12 +1,16 @@
 import json
 import logging
+from __crud.contract_repository import ContractNumberConflictError
 import redis
 from sqlalchemy.orm import Session
 
 from .client import TelegramAPIClient
-from .schemas import IncomingContractPayload
+from __schemas.incoming import incoming_payload_adapter
+from __schemas.external_contract import ExternalContractCreateRequest
+from __schemas.contract_annex import IncomingAnnexPayload
 from core.config import settings
 from services.contract_service import ContractService
+from services.contract_annex_service import ContractAnnexService
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 logger = logging.getLogger(__name__)
@@ -20,6 +24,7 @@ class TelegramQueueService:
         self.db = db
         self.client = TelegramAPIClient()
         self.contract_service = ContractService(db=db)
+        self.annex_service = ContractAnnexService(db=db)
         # offset хранится в Redis, чтобы не обрабатывать одни и те же апдейты после перезапуска/нового запуска по расписанию
         self.redis = redis_client or redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
 
@@ -55,16 +60,17 @@ class TelegramQueueService:
                 continue
 
             try:
-                # 1. Парсим текст сообщения как JSON
-                raw_data = json.loads(text)
-                
-                # 2. Валидируем через реальную схему ExternalContractCreateRequest
-                payload = IncomingContractPayload(**raw_data)
-                
-                # 3. Вызываем ваш реальный бизнес-метод создания контракта и генерации docx
-                contract = self.contract_service.create_external_contract(payload)
-                
-                logger.info(f"✅ Успешно обработана заявка из Telegram, создан договор № {contract.contract_number}")
+                raw = json.loads(text)
+                payload = incoming_payload_adapter.validate_python(raw)
+
+                if isinstance(payload, ExternalContractCreateRequest):
+                    contract = self.contract_service.create_external_contract(payload)
+                    logger.info(f"✅ Договор № {contract.contract_number} создан из Telegram")
+                elif isinstance(payload, IncomingAnnexPayload):
+                    annex = self.annex_service.create_external_annex(payload)
+                    logger.info(f"✅ Приложение № {annex.annex_number} создано из Telegram")
+
+
                 processed_count += 1
 
                 self._save_offset(update_id + 1)
@@ -80,6 +86,12 @@ class TelegramQueueService:
                     f"Полученный JSON: {text}"
                 )
                 self._save_offset(update_id + 1)
+            except ContractNumberConflictError as e:
+                            self.db.rollback()
+                            logger.warning(
+                                f"⚠️ Сообщение Telegram (ID: {update_id}): договор с таким номером уже существует: {e}"
+                            )
+                            self._save_offset(update_id + 1)        
             except IntegrityError as e:
                 self.db.rollback()
                 logger.error(
@@ -87,6 +99,7 @@ class TelegramQueueService:
                     f"Договор с таким номером уже существует в базе."
                 )
                 self._save_offset(update_id + 1)    
+           
             except Exception as e:
                 self.db.rollback()
                 logger.error(f"🔥 Ошибка при сохранении контракта из Telegram (ID: {update_id}): {e}")

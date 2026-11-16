@@ -6,6 +6,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi import HTTPException
+
+from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse
 from api.v1.api import api_router
 from api.v1.endpoints.tracks import router as tracks_router
 from api.v1.endpoints.drafts import router as drafts_router
@@ -29,12 +32,26 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="MoMu Management System", lifespan=lifespan)
-
-
-import os
-from fastapi import HTTPException
-from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+import os
+
+class DirectoryListingStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except HTTPException as ex:
+            if ex.status_code == 404:
+                full_path = os.path.join(self.directory, path)
+                if os.path.isdir(full_path):
+                    files = sorted(os.listdir(full_path))
+                    items = [f'<li><a href="/files/{os.path.join(path, f)}">{f}</a></li>' for f in files]
+                    return HTMLResponse(f"<ul>{''.join(items)}</ul>")
+            raise ex
+
+app.mount("/files", DirectoryListingStaticFiles(directory="/docs", html=True), name="files")
+
+
+
 
 app.include_router(api_router, prefix="/api/v1")
 app.include_router(tracks_router, prefix="/api")
@@ -50,4 +67,7 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["X-Total-Count"],
 )
+
+
+
 

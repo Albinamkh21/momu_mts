@@ -24,7 +24,7 @@ class ContractService:
         self.db = db
         self.repo = ContractRepository(db)
         self.right_holder_repo = RightHolderRepository(db)
-        self.contract_repo = ContractRepository(db)
+       
 
     @staticmethod
     def _to_response(obj) -> ContractResponse:
@@ -132,18 +132,39 @@ class ContractService:
             ) from e
         if obj is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Договор не найден")
-
+        self.db.expire_all()
         # Перегенерация файла договора с учетом новых данных
-        holder = obj.right_holder
+        contract = self.repo.get_by_id(contract_id)
+        for key, value in data.items():
+            if hasattr(contract, key):
+                setattr(contract, key, value)
+        
+
+      
+        if contract is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Договор не найден")
+
+        contract_dict = {
+            "id": getattr(contract, "id", None),
+            "contract_number": getattr(contract, "contract_number", None),
+            "signed_date": getattr(contract, "signed_date", None),
+            "file_path": getattr(contract, "file_path", None),
+            "file_name": getattr(contract, "file_name", None),
+            "valid_from": getattr(contract, "valid_from", None),
+            "valid_to": getattr(contract, "valid_to", None),
+        }
+        print(f"📄 Перегенерация файла для договора. Данные: {contract_dict}", flush=True)
+
+        holder = contract.right_holder
         if holder is not None:
             try:
                 generated_path = DocumentService.generate_contract_doc(
-                    contract=obj,
+                    contract=contract,
                     holder=holder,
                     payload_extra=data,
                 )
                 new_path_obj = Path(generated_path)
-                obj = self.repo.update(
+                contract = self.repo.update(
                     contract_id,
                     {"file_path": str(new_path_obj.parent), "file_name": new_path_obj.name},
                 )
@@ -157,7 +178,7 @@ class ContractService:
             except Exception as exc:
                 print(f"⚠️ Не удалось перегенерировать файл договора: {exc}", flush=True)
 
-        return self._to_response(obj)
+        return self._to_response(contract)
 
     def delete(self, contract_id: int) -> None:
         obj = self.repo.get_by_id(contract_id)
@@ -247,7 +268,7 @@ class ContractService:
                 "status": "DRAFT",
             }
 
-            contract = self.contract_repo.create(contract_data)
+            contract = self.repo.create(contract_data)
 
             generated_path = DocumentService.generate_contract_doc(
                 contract=contract, 
@@ -255,7 +276,7 @@ class ContractService:
                 payload_extra=payload.model_dump()
             )
             path_obj = Path(generated_path)
-            contract = self.contract_repo.update(
+            contract = self.repo.update(
                 contract.id,
                 {"file_path": str(path_obj.parent), "file_name": path_obj.name},
             )

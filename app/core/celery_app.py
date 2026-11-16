@@ -34,7 +34,7 @@ celery_app.conf.update(
 celery_app.conf.beat_schedule = {
     "poll-telegram-orders": {
         "task": "poll_telegram_orders",
-        "schedule": int(os.getenv("TELEGRAM_POLL_INTERVAL_SECONDS", "300")),
+        "schedule": int(os.getenv("TELEGRAM_POLL_INTERVAL_SECONDS", "60")),
     },
 }
 

@@ -82,6 +82,7 @@ services:
     command: watchfiles --filter python "celery -A core.celery_app worker --loglevel=info"
     volumes:
       - ./app:/app
+      - ./docs:/docs
     environment:
       PYTHONPATH: /app
       CELERY_BROKER_URL: ${CELERY_BROKER_URL}
@@ -105,6 +106,7 @@ services:
     command: celery -A core.celery_app beat --loglevel=info
     volumes:
       - ./app:/app
+      - ./docs:/docs 
     environment:
       PYTHONPATH: /app
       CELERY_BROKER_URL: ${CELERY_BROKER_URL}

@@ -9,8 +9,12 @@ export const ContractAnnexGrid = ({
   onView,
   onEdit,
   onDelete,
+  onDownloadAnnex,
 }) => {
-  const columnDefs = useMemo(() => getContractAnnexColumns({ onView, onEdit }), [onView, onEdit]);
+  const columnDefs = useMemo(
+    () => getContractAnnexColumns({ onView, onEdit,  onDownloadAnnex}),
+    [onView, onEdit, onDownloadAnnex]
+  );
 
   return (
     <DataGrid

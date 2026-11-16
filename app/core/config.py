@@ -16,12 +16,16 @@ def get_project_root() -> Path:
 
 
 def get_docs_base_dir() -> Path:
-    """Папка docs: смонтированный /docs в контейнере, иначе <project_root>/docs локально."""
-    #docker_docs_dir = Path("/docs")
-    #if docker_docs_dir.exists():
-       # return docker_docs_dir
-    return get_project_root() / "docs"
+    """Папка docs: DOCS_DIR из env, иначе /docs (Docker), иначе <project_root>/docs."""
+    env_docs = os.getenv("DOCS_DIR")
+    if env_docs:
+        return Path(env_docs)
 
+    docker_docs_dir = Path("/docs")
+    if docker_docs_dir.exists():
+        return docker_docs_dir
+
+    return get_project_root() / "docs"
 
 
 def setup_logging():

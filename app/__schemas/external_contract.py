@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Optional
+from typing import Optional, Literal
 from pydantic import BaseModel, ConfigDict
 
 
@@ -9,6 +9,7 @@ class ExternalContractCreateRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     # Поля контракта
+    request_type: Literal["CONTRACT"] = "CONTRACT"
     contract_number: str
     direction_type: Optional[str] = None
     signed_date: Optional[date] = None

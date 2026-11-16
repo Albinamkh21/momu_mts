@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 from enum import Enum
-from typing import Optional, List
+from typing import Optional, List, Literal  
 from pydantic import BaseModel, Field
 
 
@@ -23,6 +23,8 @@ class AnnexItemPayload(BaseModel):
 
 class IncomingAnnexPayload(BaseModel):
     """Корневая схема входящего приложения от сайта/Telegram/API."""
+
+    request_type: Literal["ANNEX"] = "ANNEX"   
     contract_number: str = Field(..., description="Номер договора, к которому привязывается приложение")
     annex_number: str = Field(..., description="Номер приложения (например, '1' или '2-1')")
     doc_date: date = Field(..., description="Дата документа")

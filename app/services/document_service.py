@@ -19,17 +19,37 @@ class DocumentService:
     ANNEX_ITEMS_FIRST_ROW = 16
     ANNEX_ITEMS_COLUMNS = ("A", "B", "C", "D", "E", "F", "G", "H", "I")
 
+    UDL_TITLES_BY_DOC_TYPE = {
+    "паспорт": {
+        "udl_num_title":   "Паспорт",
+        "udl_vidan_title": "выдан",
+        "udl_date_title":  "дата выдачи",
+    },
+    "свидетельство": {
+        "udl_num_title":   "Свидетельство",
+        "udl_vidan_title": "выдано",
+        "udl_date_title":  "дата выдачи",
+    },
+    # default — удостоверение личности РК (физлицо)
+    "": {
+        "udl_num_title":   "Удостоверение личности",
+        "udl_vidan_title": "выдано",
+        "udl_date_title":  "дата выдачи",
+    },
+}
+
+
     @staticmethod
     def _format_date_ru(d: Optional[date]) -> str:
         if not d:
             return ""
-        return f"{d.day:02d}.{d.month:02d}.{d.year} г."
+        return f"{d.day:02d}.{d.month:02d}.{d.year}"
 
     @staticmethod
     def _format_date_kz(d: Optional[date]) -> str:
         if not d:
             return ""
-        return f"{d.day:02d}.{d.month:02d}.{d.year} ж."
+        return f"{d.day:02d}.{d.month:02d}.{d.year}"
 
     @staticmethod
     def _format_date_plain(d: Optional[date]) -> str:
@@ -39,41 +59,64 @@ class DocumentService:
             return ""
         return f"{d.day:02d}.{d.month:02d}.{d.year}"
 
+
     @classmethod
     def _prepare_context(cls, contract, holder, payload_extra: dict) -> dict:
-        """Отдельный метод для подготовки и маппинга контекста под теги шаблона."""
-        contract_number = contract.contract_number
-        holder_name = holder.name or holder.full_name or ""
-        alias = holder.alias or ""
+
+        h_type = (holder.type or "").upper()
+        is_company = h_type in ("COMPANY", "LABEL")
+
         signed_date = contract.signed_date or date.today()
+        valid_from  = contract.valid_from  or date.today()
+        valid_to    = contract.valid_to    or date.today()
+
+        cname = holder.name or ""
+        udl_titles = holder.id_document_type
+
+        # Для юрлиц документ-удостоверение — это БИН, а не удостоверение личности.
+        udl_short = holder.id_document_type + " " + (holder.id_document_number or "")
 
         return {
-            "num": contract_number,
-            "doc_date": cls._format_date_ru(signed_date),
-            "doc_date_kz": cls._format_date_kz(signed_date),
-            "cname": holder_name,
-            "cn_title": payload_extra.get("cn_title", "Гражданин(ка)"),
-            
-            # Маппинг реальных колонок RightHolder на теги шаблона:
-            "iin": holder.iin_bin or "",
-            "udl": holder.id_document_type or "Удостоверение личности",
-            "udl_num_footer": holder.id_document_number or "",
-            "udl_vidan": holder.id_document_issued_by or "",
-            "udl_date": cls._format_date_ru(holder.id_document_issue_date),
-            
-            "artist_name": alias if alias else holder_name,
-            "address": holder.address or "",
-            "phone": holder.phone or "",
-            "email": holder.email or "",
-            
-            # Банковские реквизиты:
-            "bank_acc": holder.iban or "",
-            "bank_name": holder.bank_name or "",
-            "bank_bik": holder.bik or "",
-            "bank_kbe": payload_extra.get("bank_kbe", ""),
-            "director_short": payload_extra.get("director_short", holder_name),
-        }
+            # ─── Шапка договора ─────────────────────────────────────────────
+            "num":         contract.contract_number,
+            "doc_date":    cls._format_date_ru(valid_from),   # дата подписания (RU)
+            "doc_date_kz": cls._format_date_kz(valid_from),   # дата подписания (KZ)
 
+            # ─── Лицензиар (правообладатель) ────────────────────────────────
+            "cn_title": "Лицензиар",
+            "cname":    cname,
+            "address":  holder.address or "",
+            "iin":      holder.iin_bin or "",                  # ИИН/БИН
+            "phone":    holder.phone or "",
+            "email":    holder.email or "",
+
+            # ─── Удостоверение личности / БИН ───────────────────────────────
+            "udl":             udl_short,
+            "udl_num_title":   holder.id_document_type,
+            "udl_num_footer":  holder.id_document_number or "",
+            "udl_vidan_title": "выдан" if not is_company else "выдано",
+            "udl_vidan":       holder.id_document_issued_by or "",
+            "udl_date_title":  "дата выдачи",
+            "udl_date":        cls._format_date_ru(holder.id_document_issue_date),
+
+            # ─── Исполнитель ────────────────────────────────────────────────
+            "artist_name": holder.alias ,
+
+            # ─── Банковские реквизиты ───────────────────────────────────────
+            "bank_acc":  holder.iban or "",
+            "bank_name": holder.bank_name or "",
+            "bank_bik":  holder.bik or "",
+            # kbe пока нет в модели RightHolder; после добавления колонки
+            # замените на holder.kbe or "" — сейчас берём из payload как fallback.
+            "bank_kbe": getattr(holder, "kbe", None) or payload_extra.get("bank_kbe", "") or "",
+
+            # ─── Срок действия (ключи в шаблоне пока отсутствуют, но пусть будут,
+            #     чтобы не забыть, если добавите ${valid_from}/${valid_to} в п. 1.13) ─
+            "valid_from":    cls._format_date_ru(valid_from),
+            "valid_to":      cls._format_date_ru(valid_to),
+            "valid_from_kz": cls._format_date_kz(valid_from),
+            "valid_to_kz":   cls._format_date_kz(valid_to),
+        }
     @classmethod
     def _get_contract_dir(cls, contract, holder) -> Path:
         """Возвращает (и создает при необходимости) папку договора на диске.
@@ -149,14 +192,14 @@ class DocumentService:
     @classmethod
     def _prepare_annex_context(cls, contract, holder, annex) -> dict:
         """Контекст тегов ${...} для шаблона contract_annex.xlsx."""
-        signed_date = contract.signed_date or date.today()
+        valid_from = contract.valid_from or date.today()
         holder_name = holder.name or holder.full_name or ""
         alias = holder.alias or ""
 
         return {
             "contract_num": contract.contract_number,
-            "contract_date": cls._format_date_plain(signed_date),
-            "contract_date_kz": cls._format_date_plain(signed_date),
+            "contract_date": cls._format_date_plain(valid_from),
+            "contract_date_kz": cls._format_date_plain(valid_from),
             "pril_num": annex.annex_number,
             "doc_date": cls._format_date_plain(annex.doc_date),
             "doc_date_kz": cls._format_date_plain(annex.doc_date),

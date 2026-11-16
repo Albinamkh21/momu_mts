@@ -4,6 +4,7 @@ from __future__ import annotations
 from sqlite3 import IntegrityError
 from typing import Optional
 
+import os
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -274,3 +275,15 @@ class ContractAnnexService:
 
         annex = self.annex_repo.set_status(annex, AnnexStatus.PARSED, file_path=file_path)
         return self._to_response(annex)
+
+    def get_annex_file_path(self, contract_id: int, annex_id: int) -> str:
+            # Получаем приложение с учетом принадлежности к конкретному договору (для безопасности)
+            obj = self.annex_repo.get_by_id(annex_id)
+            if obj is None or not obj.file_path:
+                raise HTTPException(status_code=404, detail="Приложение или файл не найден")
+
+            target_path = obj.file_path
+            if not os.path.isfile(target_path):
+                raise HTTPException(status_code=404, detail="Файл приложения физически отсутствует на сервере")
+
+            return target_path

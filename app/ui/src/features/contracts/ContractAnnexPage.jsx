@@ -6,7 +6,7 @@ import { getContractAnnexFilterFields } from './components/contractAnnexFilterFi
 import { ContractAnnexForm } from './editor/ContractAnnexForm';
 import { ContractAnnexItems } from './ContractAnnexItems';
 import { getContractDetail } from './api/contracts.api';
-import { deleteContractAnnex } from './api/contractAnnex.api';
+import { deleteContractAnnex, downloadContractAnnex } from './api/contractAnnex.api';
 import './contracts.css';
 
 /**
@@ -64,6 +64,28 @@ export const ContractAnnexPage = ({ contractId, onBack }) => {
     }
   };
 
+const handleDownloadAnnex = async (annex) => {
+  setActionError('');
+  try {
+    const blob = await downloadContractAnnex(contractId, annex.id);
+
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+
+    // Можно передать дефолт на случай пустоты, но бэкенд пришлет точное имя из пути
+    link.download = annex.file_path ? annex.file_path.split('/').pop() : 'document.xlsx';
+
+    document.body.appendChild(link);
+    link.click();
+
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  } catch (err) {
+    setActionError(err.response?.data?.detail || 'Не удалось скачать файл приложения.');
+  }
+};
+
   return (
     <div className="contract-annex-page">
       <button type="button" className="btn" onClick={onBack}>← Назад к договору</button>
@@ -103,6 +125,7 @@ export const ContractAnnexPage = ({ contractId, onBack }) => {
           onView={openViewEditor}
           onEdit={openEditEditor}
           onDelete={handleDelete}
+          onDownloadAnnex={handleDownloadAnnex}
         />
       </CrudPageLayout>
     </div>
