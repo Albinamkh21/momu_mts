@@ -14,8 +14,14 @@ branch_labels = None
 depends_on = None
 
 def upgrade() -> None:
-    # 1. Удаляем старое ограничение CheckConstraint
 
+
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_track_right_contract_id "
+        "ON track_right (contract_id);"
+    )
+
+ 
     # Удаляем возможные старые ограничения/индексы по name/inn
     op.execute("ALTER TABLE right_holder DROP CONSTRAINT IF EXISTS right_holder_name_key")
     op.execute("ALTER TABLE right_holder DROP CONSTRAINT IF EXISTS right_holder_name")
@@ -75,6 +81,11 @@ def upgrade() -> None:
 
 def downgrade() -> None:
 
+    
+    op.execute(
+        "DROP INDEX IF EXISTS idx_track_right_contract_id;"
+    )
+    
     op.drop_index('right_holder_name_no_iin_idx', table_name='right_holder')
     op.drop_index('right_holder_iin_bin_idx', table_name='right_holder')
 

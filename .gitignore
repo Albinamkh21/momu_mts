@@ -3,7 +3,7 @@ backups/
 app/storage/
 app/logs/
 dist/
-docs
+docs/
 node_modules/
 *.log
 .DS_Store
