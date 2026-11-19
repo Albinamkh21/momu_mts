@@ -1,12 +1,21 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, sessionmaker, Session
 from sqlalchemy import create_engine, pool
 import os
+from typing import Generator
 
 
 class Base(DeclarativeBase):
     pass
 
+def get_db() -> Generator[Session, None, None]:
+    """Get database session"""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+        
 def get_conn():
     with sync_engine.begin() as conn:
         yield conn

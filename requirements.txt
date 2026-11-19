@@ -2,7 +2,7 @@ fastapi
 uvicorn[standard]
 sqlalchemy[asyncio]
 asyncpg
-polars[rtcompat]
+polars[rtcompat]<2
 fastexcel
 python-multipart
 celery
@@ -12,7 +12,7 @@ pydantic-settings
 psycopg2-binary
 adbc-driver-postgresql
 xlsxwriter
-pandas
+pandas<3
 numpy==1.26.4
 pyarrow>=14.0.1
 openpyxl

@@ -1,13 +1,20 @@
-"""Controller (routes) for the Contract module.
-
-Endpoint -> Controller (this router) -> ContractService -> ContractRepository -> DB
-"""
-from __future__ import annotations
 import os
-from fastapi.responses import FileResponse
+import sys
 from typing import Optional
+from uuid import uuid4
+import shutil
 
-from __schemas.external_contract import ExternalContractCreateRequest
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, UploadFile, File
+from fastapi.responses import FileResponse
+from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
+
+from openpyxl import Workbook
+
+from celery import chain
+from core.database import  create_engine, get_db
+
 from __schemas.contract_annex import (
     AnnexItemCreate,
     AnnexItemResponse,
@@ -18,11 +25,6 @@ from __schemas.contract_annex import (
     ContractAnnexUpdate,
     IncomingAnnexPayload,
 )
-from fastapi import APIRouter, Depends, Path, Query, HTTPException
-from sqlalchemy.orm import Session
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from api.deps import get_db
 from __schemas.contracts import (
     ContractCreate,
     ContractDirectionType,
@@ -31,10 +33,34 @@ from __schemas.contracts import (
     ContractStatus,
     ContractUpdate,
 )
-from services.contract_service import ContractService
+from __schemas.external_contract import ExternalContractCreateRequest
 from services.contract_annex_service import ContractAnnexService
+from services.contract_service import ContractService
+from tasks.contract_import_tasks import process_contract_file
+from api.deps import get_current_user, User, Depends
+from core.database import get_conn
+from core.celery_app import celery_app
+
 
 router = APIRouter()
+
+
+
+def get_database_url():
+    is_testing = "pytest" in sys.modules or os.getenv("TESTING") == "true"
+    
+    if is_testing:
+        test_url = os.getenv("DATABASE_URL_TEST")
+        if test_url:
+            return test_url
+        # Если тест идет, а тестовой переменной нет — подставляем тестовую базу явно по шаблону
+        return os.getenv("DATABASE_URL", "").replace("/momu", "/momu_test")
+        
+    return os.getenv("DATABASE_URL")
+
+DATABASE_URL = get_database_url()
+engine = create_engine(DATABASE_URL)
+STORAGE_DIR = "/app/storage"
 
 
 @router.get("", response_model=ContractListResponse)
@@ -263,3 +289,33 @@ def download_contract_annex(
     filename = os.path.basename(file_path)
 
     return FileResponse(file_path, filename=filename)
+
+@router.post("/upload")
+async def upload_contracts(file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
+    if not file.filename.endswith(('.xlsx', '.csv')):
+        raise HTTPException(status_code=400, detail="Invalid file type")
+
+    file_id = str(uuid4())
+    file_ext = os.path.splitext(file.filename)[1]
+    file_path = os.path.join(STORAGE_DIR, f"{file_id}{file_ext}")
+
+    if current_user is None:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    upload_id = str(uuid4())
+    workflow = chain(
+        process_contract_file.s(file_path, upload_id=upload_id, original_filename=file.filename,  user_id=current_user.id),
+        #sync_catalog_dictionaries.s("v2", upload_id=upload_id),
+    )
+
+  
+    task_result = workflow.apply_async(task_id=upload_id)
+
+    return {
+        "message": "Файл принят и поставлен в очередь на обработку (v2)",
+        "task_id": upload_id,
+        "filename": file.filename
+    }
