@@ -3,7 +3,7 @@ import { CONTRACT_STATUS_OPTIONS } from './contractFilterFields';
 
 const STATUS_LABELS = Object.fromEntries(CONTRACT_STATUS_OPTIONS.map((o) => [o.value, o.label]));
 
-export const getContractColumns = ({ onView, onEdit, onViewRightHolder, onViewAnnexes, onOpenFolder }) => [
+export const getContractColumns = ({ onView, onEdit, onViewRightHolder, onViewAnnexes, onOpenFolder, onUploadFile }) => [
   { field: 'id', headerName: 'ID', width: 70, sortable: true },
   {
     field: 'contract_number',
@@ -80,6 +80,20 @@ export const getContractColumns = ({ onView, onEdit, onViewRightHolder, onViewAn
             title="Редактировать договор"
           >
             ✎
+          </button>
+          <button
+              type="button"
+              className="btn-sm"
+              onClick={() => onUploadFile && onUploadFile(params.data)}
+              title="Загрузить файл в папку договора"
+              style={{
+                marginRight: '0.25rem',
+                fontSize: '1.15rem',
+                fontWeight: 700,
+                lineHeight: 1,
+              }}
+            >
+            +
           </button>
           <button
             type="button"

@@ -19,6 +19,7 @@ export const CrudPageLayout = ({
   error,
   sidebar,
   children,
+  exportButton,
 }) => (
   <div className={`crud-page ${className}`}>
     <FilterPanel
@@ -29,6 +30,7 @@ export const CrudPageLayout = ({
       loading={loading}
       title={filterTitle}
       addButton={addButton}
+      exportButton={exportButton}
     />
 
     {editorSlot}

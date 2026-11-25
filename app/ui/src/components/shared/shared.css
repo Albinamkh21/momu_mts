@@ -54,6 +54,16 @@
   transform: rotate(180deg);
 }
 
+.filters-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.filters-header__actions .btn-primary {
+  width: auto;
+  flex: 0 0 auto;
+}
+
 .filters-body {
   max-height: 200px;
   opacity: 1;

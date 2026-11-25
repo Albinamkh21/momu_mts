@@ -2,12 +2,14 @@ import os
 import re
 from datetime import datetime
 import polars as pl
+import sys
+import uuid
 from sqlalchemy import text, create_engine
 from core.celery_app import celery_app
 from .utils import clean_null_bytes
 from services.broadcaster import TaskProgress
-import sys
-import uuid
+from services.contract_service import ContractService
+
 
 
 def get_database_url():
@@ -209,29 +211,29 @@ def sync_contracts_from_staging(self, prev_result=None, upload_id: str = None):
 
     task_id = self.request.id
     success = False
+    engine = None
 
     try:
       
         engine = create_engine(DATABASE_URL)
-
         with engine.begin() as conn:
             print(f"🔄 [contracts] Начинаем разбор staging_contact для upload_id={upload_id}")
             TaskProgress.emit(upload_id, "🔄 Начинаем разбор загруженных договоров...")
 
-            # Здесь вызываются ваши функции переноса в целевые таблицы (например, контрагенты / договоры)
-            # с передачей `conn` и `upload_id`, по аналогии с catalog_tasks_v2.py.
-            rows_count = conn.execute(
-                text(f"SELECT COUNT(*) FROM {STAGING_TABLE} WHERE upload_id = :uid"),
-                {"uid": upload_id},
-            ).scalar()
-
-            # Очищаем staging после успешного переноса
-            conn.execute(
-                text(f"DELETE FROM {STAGING_TABLE} WHERE upload_id = :uid"),
-                {"uid": upload_id},
+            service = ContractService(conn)
+            updated_count = service.sync_from_staging(upload_id=upload_id, staging_table=STAGING_TABLE)
+            print(f"🔢 [contracts] Обновлено строк: {updated_count}")
+            TaskProgress.emit(
+                upload_id,
+                f"🔢 Заполнены contract_number и contact_type для {updated_count} строк",
             )
 
+            rows_count = conn.execute(
+                text(f"SELECT COUNT(*) FROM {STAGING_TABLE} WHERE upload_id = :uid"),
+                {"uid": uuid.UUID(str(upload_id))},
+            ).scalar()
         success = True
+
         print(f"✅ [contracts] Синхронизация завершена. Обработано строк: {rows_count}")
         TaskProgress.emit(upload_id, f"✅ Разбор договоров завершён. Строк: {rows_count}")
         return {
@@ -247,11 +249,43 @@ def sync_contracts_from_staging(self, prev_result=None, upload_id: str = None):
 
     finally:
         if not success:
-            from sqlalchemy import create_engine
-            engine = create_engine(DATABASE_URL)
-            with engine.begin() as clean_conn:
-                clean_conn.execute(
-                    text(f"DELETE FROM {STAGING_TABLE} WHERE upload_id = :uid"),
-                    {"uid": upload_id},
-                )
-            TaskProgress.emit(upload_id, f"🧹 Staging {STAGING_TABLE} очищен после ошибки синхронизации")
+                # Очистка staging в случае ошибки
+                ###if engine:
+                    #with engine.begin() as clean_conn:
+                    #    clean_conn.execute(
+                    #        text(f"DELETE FROM {STAGING_TABLE} WHERE upload_id = :uid"),
+                    #        {"uid": upload_id},
+                    #    )
+                    TaskProgress.emit(upload_id, f"🧹 Staging {STAGING_TABLE} должен будет автоматически очищен после ошибки синхронизации")
+
+
+@celery_app.task(name="export_contracts_excel_task", bind=True)
+def export_contracts_excel_task(
+    self,
+    rights_holder_id: int | None = None,
+    status: str | None = None,
+    direction_type: str | None = None,
+    search: str | None = None,
+    output_dir: str = "/app/storage",
+):
+    task_id = self.request.id
+    TaskProgress.emit(task_id, "✅ Начало выгрузки договоров в Excel...")
+    eng = create_engine(DATABASE_URL)
+    try:
+        with eng.begin() as conn:
+            service = ContractService(conn)
+            result = service.export_to_excel(
+                output_dir=output_dir,
+                rights_holder_id=rights_holder_id,
+                status_=status,
+                direction_type=direction_type,
+                search=search,
+                task_id=task_id,
+            )
+        TaskProgress.emit(task_id, f"✅ Выгрузка завершена. Строк: {result['rows_exported']}")
+        return result
+    except Exception as e:
+        TaskProgress.emit(task_id, f"❌ Ошибка выгрузки договоров: {e}", level="error")
+        raise
+    finally:
+        eng.dispose()                  

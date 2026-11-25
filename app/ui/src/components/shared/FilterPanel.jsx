@@ -5,7 +5,7 @@ import React, { useState } from 'react';
  * `{ key, label, type: 'text' | 'select' | 'date', placeholder, options }`.
  * Reports the whole filters object back via `onChange`.
  */
-export const FilterPanel = ({ fields, filters, onChange, onSearch, loading, title = 'Фильтры', addButton }) => {
+export const FilterPanel = ({ fields, filters, onChange, onSearch, loading, title = 'Фильтры', addButton, exportButton }) => {
   const [collapsed, setCollapsed] = useState(false);
 
   const set = (key) => (e) => onChange({ ...filters, [key]: e.target.value });
@@ -35,11 +35,18 @@ export const FilterPanel = ({ fields, filters, onChange, onSearch, loading, titl
             ▲
           </span>
         </div>
-        {addButton && (
-          <button className="btn-primary" onClick={(e) => { e.stopPropagation(); addButton.onClick(); }}>
-            {addButton.label}
-          </button>
-        )}
+        <div class="filters-header__actions">
+          {addButton && (
+            <button className="btn-primary" onClick={(e) => { e.stopPropagation(); addButton.onClick(); }}>
+              {addButton.label}
+            </button>
+          )}
+          {exportButton && (
+            <button className="btn-primary" onClick={(e) => { e.stopPropagation(); exportButton.onClick(); }} disabled={exportButton.disabled}>
+              {exportButton.label}
+            </button>
+          )}
+        </div>
       </div>
 
       <div className={`filters-body ${collapsed ? 'filters-body--hidden' : ''}`}>

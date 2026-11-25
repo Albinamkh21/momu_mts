@@ -7,13 +7,13 @@ import shutil
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, UploadFile, File
 from fastapi.responses import FileResponse
 from sqlalchemy import create_engine
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from openpyxl import Workbook
 
 from celery import chain
 from core.database import  create_engine, get_db
+
 
 from __schemas.contract_annex import (
     AnnexItemCreate,
@@ -36,7 +36,7 @@ from __schemas.contracts import (
 from __schemas.external_contract import ExternalContractCreateRequest
 from services.contract_annex_service import ContractAnnexService
 from services.contract_service import ContractService
-from tasks.contract_import_tasks import process_contract_file
+from tasks.contract_import_tasks import process_contract_file, sync_contracts_from_staging
 from api.deps import get_current_user, User, Depends
 from core.database import get_conn
 from core.celery_app import celery_app
@@ -61,6 +61,19 @@ def get_database_url():
 DATABASE_URL = get_database_url()
 engine = create_engine(DATABASE_URL)
 STORAGE_DIR = "/app/storage"
+
+
+@router.get("/download_export/{filename}")
+async def download_file(filename: str):
+    # Защита от path traversal – разрешаем только файлы из storage
+    safe_path = os.path.join(STORAGE_DIR, os.path.basename(filename))
+    if not os.path.exists(safe_path):
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    return FileResponse(
+        path=safe_path,
+        filename=filename,
+        media_type="application/octet-stream"
+    )  
 
 
 @router.get("", response_model=ContractListResponse)
@@ -308,7 +321,7 @@ async def upload_contracts(file: UploadFile = File(...), current_user: User = De
     upload_id = str(uuid4())
     workflow = chain(
         process_contract_file.s(file_path, upload_id=upload_id, original_filename=file.filename,  user_id=current_user.id),
-        #sync_catalog_dictionaries.s("v2", upload_id=upload_id),
+        sync_contracts_from_staging.s(upload_id=upload_id),
     )
 
   
@@ -319,3 +332,64 @@ async def upload_contracts(file: UploadFile = File(...), current_user: User = De
         "task_id": upload_id,
         "filename": file.filename
     }
+
+@router.post("/export", status_code=200)
+def export_contracts_excel(
+    rights_holder_id: Optional[int] = Query(None, gt=0),
+    status: Optional[str] = Query(None),
+    direction_type: Optional[str] = Query(None),
+    search: Optional[str] = Query(None, max_length=255),
+    db: Session = Depends(get_db),
+):
+    # Преобразуем пустые строки в None, чтобы не ломать SQL-фильтры
+    status_val = status if status and status.strip() else None
+    direction_val = direction_type if direction_type and direction_type.strip() else None
+
+    result = ContractService(db).export_to_excel(
+        rights_holder_id=rights_holder_id,
+        status=status_val,
+        direction_type=direction_val,
+        search=search,
+        output_dir=STORAGE_DIR,
+    )
+    return {
+        "status": "success",
+        "filename": result["filename"],
+        "rows_exported": result["rows_exported"],
+    }
+
+
+@router.post("/{contract_id}/upload-file")
+def upload_contract_file(
+    contract_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    contract = ContractService(db).repo.get_by_id(contract_id)
+    if not contract:
+        raise HTTPException(status_code=404, detail="Contract not found")
+
+    if not contract.file_path:
+        raise HTTPException(status_code=400, detail="У договора не задана папка (file_path)")
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Некорректное имя файла")
+
+    os.makedirs(contract.file_path, exist_ok=True)
+    safe_filename = os.path.basename(file.filename)
+    dest_path = os.path.join(contract.file_path, safe_filename)
+
+    try:
+        with open(dest_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    finally:
+        file.file.close()
+
+    return {
+        "status": "success",
+        "contract_id": contract_id,
+        "filename": safe_filename,
+        "file_path": dest_path,
+    }
+
+    

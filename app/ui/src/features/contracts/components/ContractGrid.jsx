@@ -12,10 +12,11 @@ export const ContractGrid = ({
   onViewAnnexes,
   searchTrigger,
   onOpenFolder,
+  onUploadFile,
 }) => {
   const columnDefs = useMemo(
-    () => getContractColumns({ onView, onEdit, onViewRightHolder, onViewAnnexes, onOpenFolder }),
-    [onView, onEdit, onViewRightHolder, onViewAnnexes, onOpenFolder]
+    () => getContractColumns({ onView, onEdit, onViewRightHolder, onViewAnnexes, onOpenFolder, onUploadFile }),
+    [onView, onEdit, onViewRightHolder, onViewAnnexes, onOpenFolder, onUploadFile]
   );
 
   return (
